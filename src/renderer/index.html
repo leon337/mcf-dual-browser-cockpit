@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+  <title>MCF Dual Browser Cockpit</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="appbar">
+    <div class="brand-group">
+      <div class="logo">M</div>
+      <div>
+        <div class="brand">MCF DUAL BROWSER COCKPIT</div>
+        <div class="subtitle">LEANDRO + MESTRE · duas sessões, um cockpit</div>
+      </div>
+    </div>
+
+    <div class="layout-presets" aria-label="Layout">
+      <button class="chip" data-preset="leandro" title="Mais espaço para o ChatGPT">LEANDRO 65%</button>
+      <button class="chip active" data-preset="balanced" title="Divisão equilibrada">50 / 50</button>
+      <button class="chip" data-preset="mestre" title="Mais espaço para o navegador operacional">MESTRE 65%</button>
+    </div>
+
+    <div class="app-actions">
+      <span class="security"><span class="dot ok"></span>sessões isoladas</span>
+      <button id="bridgeButton" class="bridge-button" title="Ativa API local para automação do navegador da direita">
+        <span class="dot"></span><span>AGENT BRIDGE OFF</span>
+      </button>
+      <button id="copyTokenButton" class="icon-only hidden" title="Copiar token da bridge">⧉</button>
+    </div>
+  </header>
+
+  <section id="paneGrid" class="pane-grid">
+    <div class="pane-toolbar chat-toolbar">
+      <div class="pane-meta">
+        <div class="pane-name"><span class="owner-badge human">H</span> LEANDRO</div>
+        <span class="engine">ChatGPT</span>
+        <span id="chatLoading" class="loading-label">carregando…</span>
+      </div>
+      <div class="nav-row">
+        <button class="nav" data-pane="chat" data-action="back" title="Voltar">←</button>
+        <button class="nav" data-pane="chat" data-action="forward" title="Avançar">→</button>
+        <button class="nav" data-pane="chat" data-action="reload" title="Recarregar">↻</button>
+        <button class="nav home" data-pane="chat" data-action="home" title="ChatGPT">⌂</button>
+        <div class="address readonly"><span class="lock">●</span><span id="chatUrl">https://chatgpt.com/</span></div>
+        <button class="nav" data-pane="chat" data-action="devtools" title="DevTools">&lt;/&gt;</button>
+        <button class="nav" data-external="chat" title="Abrir no navegador padrão">↗</button>
+      </div>
+    </div>
+
+    <div id="toolbarSplitter" class="toolbar-splitter" title="Arraste para redimensionar"><span></span></div>
+
+    <div class="pane-toolbar workspace-toolbar">
+      <div class="pane-meta">
+        <div class="pane-name"><span class="owner-badge agent">M</span> MESTRE · WORKSPACE</div>
+        <span class="engine">Chromium / WebContentsView</span>
+        <span id="workspaceLoading" class="loading-label">carregando…</span>
+      </div>
+      <div class="nav-row">
+        <button class="nav" data-pane="workspace" data-action="back" title="Voltar">←</button>
+        <button class="nav" data-pane="workspace" data-action="forward" title="Avançar">→</button>
+        <button class="nav" data-pane="workspace" data-action="reload" title="Recarregar">↻</button>
+        <button class="nav home" data-pane="workspace" data-action="home" title="Página inicial">⌂</button>
+        <input id="workspaceAddress" class="address input" autocomplete="off" spellcheck="false" value="https://www.google.com/" aria-label="Endereço ou pesquisa" />
+        <button id="goButton" class="go" title="Abrir">IR</button>
+        <button id="captureButton" class="nav" title="Capturar janela de trabalho">▣</button>
+        <button class="nav" data-pane="workspace" data-action="devtools" title="DevTools">&lt;/&gt;</button>
+        <button class="nav" data-external="workspace" title="Abrir no navegador padrão">↗</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="stageDivider" class="stage-divider"><span></span></div>
+
+  <footer class="statusbar">
+    <div class="status-side"><span class="dot ok"></span><span id="chatStatus">ChatGPT: iniciando</span></div>
+    <div id="activity" class="activity">Cockpit local · Bridge desativada por padrão</div>
+    <div class="status-side right"><span id="workspaceStatus">Workspace: iniciando</span><span class="dot ok"></span></div>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="./renderer.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+node_modules/
+release/
+.DS_Store
+*.log
+*.bak
+*.zip
+*.AppImage
+.env
+.env.*
+audio-test/
+test-artifact/
+whatsapp-dev-tutorial/
