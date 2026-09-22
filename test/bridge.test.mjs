@@ -70,3 +70,58 @@ test('HTTP bridge security and concurrency', async t => {
   assert.ok(!JSON.stringify(page).includes('DO_NOT_LEAK'));
   const oldToken = bridge.token; await bridge.stop(); await bridge.start(0); assert.notEqual(oldToken, bridge.token);
 });
+
+
+test('ChatGPT conversation bridge routes', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-chatgpt-bridge-'));
+  const wc = {
+    isDestroyed: () => false,
+    getURL: () => 'https://example.test/',
+    getTitle: () => 'fixture',
+    isLoading: () => false,
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    executeJavaScript: async () => ({})
+  };
+  const conversations = new Map();
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    captureDir: dir,
+    instanceId: 'chatgpt-test',
+    openChatGPTConversation: async ({id,title}) => {
+      const conversation = {id,title,state:'READY',chatgptUrl:'https://chatgpt.com/',chatgptConversationId:null};
+      conversations.set(id, conversation);
+      return {ok:true,conversation};
+    },
+    getChatGPTConversation: async id => conversations.get(id) || null,
+    sendChatGPTMessage: async ({id,text}) => {
+      const conversation = conversations.get(id);
+      if (!conversation) return {ok:false,error:'conversation_not_found'};
+      conversation.chatgptUrl = 'https://chatgpt.com/c/abc123';
+      conversation.chatgptConversationId = 'abc123';
+      return {ok:true,conversation,response:{role:'assistant',text:'echo:'+text}};
+    },
+    closeChatGPTConversation: async id => conversations.delete(id)
+  });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir,{recursive:true}); });
+  const base = `http://127.0.0.1:${bridge.port}`;
+  const headers = {Authorization:`Bearer ${bridge.token}`,'x-mcf-instance':'chatgpt-test','Content-Type':'application/json'};
+
+  const opened = await fetch(base+'/v1/chatgpt/conversation/open',{method:'POST',headers,body:JSON.stringify({id:'island-1',title:'Ilha 1'})});
+  assert.equal(opened.status,201);
+  assert.equal((await opened.json()).conversation.state,'READY');
+
+  const state = await fetch(base+'/v1/chatgpt/conversation/island-1',{headers});
+  assert.equal(state.status,200);
+  assert.equal((await state.json()).conversation.id,'island-1');
+
+  const sent = await fetch(base+'/v1/chatgpt/conversation/island-1/send',{method:'POST',headers,body:JSON.stringify({text:'oi'})});
+  assert.equal(sent.status,200);
+  const sentBody = await sent.json();
+  assert.equal(sentBody.conversation.chatgptConversationId,'abc123');
+  assert.equal(sentBody.response.text,'echo:oi');
+
+  const closed = await fetch(base+'/v1/chatgpt/conversation/island-1/close',{method:'POST',headers,body:'{}'});
+  assert.equal(closed.status,200);
+  assert.equal(conversations.has('island-1'),false);
+});
