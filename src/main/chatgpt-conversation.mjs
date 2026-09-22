@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron';
+import { normalizedComparable, normalizeAssistantCandidate } from './chatgpt-text.mjs';
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -248,16 +249,6 @@ async function conversationSnapshot(wc) {
       title: document.title
     };
   })()`, true).catch(() => null);
-}
-
-function normalizedComparable(value) {
-  return String(value || '').replace(/\s+/g, ' ').trim();
-}
-
-function normalizeAssistantCandidate(value) {
-  return normalizedComparable(value)
-    .replace(/^(?:chatgpt\s+(?:said|disse)|assistant|assistente)\s*:?\s*/i, '')
-    .trim();
 }
 
 function transientResponseText(value) {
@@ -634,4 +625,4 @@ export class ChatGPTConversationBroker {
   }
 }
 
-export { parseConversationId, normalizeAssistantCandidate };
+export { parseConversationId };
