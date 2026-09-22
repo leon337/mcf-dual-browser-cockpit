@@ -15,7 +15,7 @@
     "dist": "electron-builder",
     "dist:win": "electron-builder --win nsis portable",
     "dist:linux": "electron-builder --linux AppImage",
-    "check": "node --check src/main/main.mjs && node --check src/main/bridge.mjs && node --check src/main/chatgpt-conversation.mjs && node --check src/main/chatgpt-text.mjs && node --check src/renderer/renderer.js && node --check src/preload/preload.cjs",
+    "check": "node --check src/main/main.mjs && node --check src/main/primary-mestre-session.mjs && node --check src/main/bridge.mjs && node --check src/main/chatgpt-conversation.mjs && node --check src/main/chatgpt-text.mjs && node --check src/renderer/renderer.js && node --check src/preload/preload.cjs",
     "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {
