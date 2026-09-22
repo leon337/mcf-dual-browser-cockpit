@@ -483,17 +483,7 @@ ipcMain.handle('browser:get-states', () => ({
   splitRatio,
 }));
 
-ipcMain.handle('workspace:capture', async () => {
-  const wc = workspaceView?.webContents;
-  if (!wc) return { ok: false, error: 'workspace_unavailable' };
-  const dir = path.join(app.getPath('pictures'), 'MCF-Cockpit-Captures');
-  mkdirSync(dir, { recursive: true });
-  const output = path.join(dir, `workspace-${Date.now()}.png`);
-  const image = await wc.capturePage();
-  writeFileSync(output, image.toPNG());
-  emitBridgeEvent({ level: 'ok', message: `Captura salva: ${output}` });
-  return { ok: true, path: output };
-});
+ipcMain.handle('workspace:capture', async () => captureWorkspace());
 
 ipcMain.handle('bridge:toggle', async () => {
   const state = await bridge?.toggle() ?? { enabled: false, host: '127.0.0.1', port: null, token: null };

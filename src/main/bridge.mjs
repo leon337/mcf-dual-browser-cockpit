@@ -219,8 +219,17 @@ export class LocalAgentBridge {
         if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 240) {
           return json(res, 400, { ok: false, error: 'text_required' });
         }
+        const normalizedText = body.text
+          .normalize('NFD')
+          .replace(/\p{Diacritic}/gu, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toLowerCase();
+        if (!normalizedText) {
+          return json(res, 400, { ok: false, error: 'text_required' });
+        }
         const script = `(() => {
-          const needle = ${JSON.stringify(body.text)}.normalize('NFD').replace(/\\p{Diacritic}/gu, '').trim().toLowerCase();
+          const needle = ${JSON.stringify(normalizedText)};
           const visible = (el) => {
             const r = el.getBoundingClientRect();
             const s = getComputedStyle(el);
@@ -229,8 +238,12 @@ export class LocalAgentBridge {
           const norm = (value) => String(value || '').normalize('NFD').replace(/\\p{Diacritic}/gu, '').replace(/\\s+/g, ' ').trim().toLowerCase();
           const nodes = [...document.querySelectorAll('a,button,[role="button"],[role="link"],[role="option"],[role="menuitem"],summary')].filter(visible);
           const el = nodes.find((node) => {
-            const hay = norm(node.innerText || node.getAttribute('aria-label') || node.getAttribute('title') || '');
-            return hay.includes(needle);
+            const labels = [
+              node.innerText,
+              node.getAttribute('aria-label'),
+              node.getAttribute('title'),
+            ].map(norm).filter(Boolean);
+            return labels.some((label) => label.includes(needle));
           });
           if (!el) return {ok:false,error:'not_found'};
           el.scrollIntoView({block:'center',inline:'center'});
@@ -311,6 +324,14 @@ export class LocalAgentBridge {
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/v1/capture') {
+        if (typeof this.captureWorkspace === 'function') {
+          const result = await this.captureWorkspace();
+          return json(
+            res,
+            result?.ok ? 200 : 500,
+            result ?? { ok: false, error: 'capture_failed' },
+          );
+        }
         mkdirSync(this.captureDir, { recursive: true });
         const image = await wc.capturePage();
         const filename = `workspace-${Date.now()}.png`;
