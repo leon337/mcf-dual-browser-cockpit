@@ -49,6 +49,17 @@ async function detectAuthState(wc) {
   })()`, true).catch(() => ({state:'UNKNOWN',path:null,hasProfile:false,hasGuestControl:false}));
 }
 
+async function waitForAuthState(wc, timeoutMs = 4500) {
+  const deadline = Date.now() + timeoutMs;
+  let last = {state:'UNKNOWN',path:null,hasProfile:false,hasGuestControl:false};
+  while (Date.now() < deadline) {
+    last = await detectAuthState(wc);
+    if (last.state === 'SIGNED_IN' || last.state === 'GUEST') return last;
+    await sleep(300);
+  }
+  return last;
+}
+
 async function composerReady(wc, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -371,7 +382,7 @@ export class ChatGPTConversationBroker {
     const existing = this.records.get(key);
     if (existing && existing.window && !existing.window.isDestroyed()) {
       if (existing.state === 'AUTH_REQUIRED') {
-        const auth = await detectAuthState(existing.window.webContents);
+        const auth = await waitForAuthState(existing.window.webContents);
         existing.authState = auth.state;
         existing.updatedAt = new Date().toISOString();
         if (auth.state === 'GUEST') {
@@ -450,7 +461,7 @@ export class ChatGPTConversationBroker {
       await win.loadURL(startUrl);
       const ready = await composerReady(win.webContents);
       if (!ready) throw new Error('chat_composer_not_found');
-      const auth = await detectAuthState(win.webContents);
+      const auth = await waitForAuthState(win.webContents);
       record.authState = auth.state;
       record.chatgptUrl = win.webContents.getURL();
       record.chatgptConversationId = parseConversationId(record.chatgptUrl);
@@ -494,7 +505,7 @@ export class ChatGPTConversationBroker {
     if (!value || value.length > 12000) return {ok:false,error:'valid_message_required'};
 
     const wc = record.window.webContents;
-    const auth = await detectAuthState(wc);
+    const auth = await waitForAuthState(wc);
     record.authState = auth.state;
     if (auth.state === 'GUEST') {
       record.state = 'AUTH_REQUIRED';
