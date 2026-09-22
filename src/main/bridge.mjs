@@ -101,6 +101,10 @@ export class LocalAgentBridge {
     captureWorkspace = null,
     openAgentSession = null,
     listAgentSessions = null,
+    openChatGPTConversation = null,
+    getChatGPTConversation = null,
+    sendChatGPTMessage = null,
+    closeChatGPTConversation = null,
     onEvent = () => {},
   }) {
     this.getWorkspaceWebContents = getWorkspaceWebContents;
@@ -112,6 +116,10 @@ export class LocalAgentBridge {
     this.captureWorkspace = captureWorkspace;
     this.openAgentSession = openAgentSession;
     this.listAgentSessions = listAgentSessions;
+    this.openChatGPTConversation = openChatGPTConversation;
+    this.getChatGPTConversation = getChatGPTConversation;
+    this.sendChatGPTMessage = sendChatGPTMessage;
+    this.closeChatGPTConversation = closeChatGPTConversation;
     this.onEvent = onEvent;
     this.server = null;
     this.port = null;
@@ -236,6 +244,53 @@ export class LocalAgentBridge {
           objective: objective || null,
         });
         return json(res, result?.ok ? 201 : 422, result ?? { ok: false, error: 'agent_session_open_failed' });
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/chatgpt/conversation/open') {
+        if (typeof this.openChatGPTConversation !== 'function') {
+          return json(res, 503, { ok:false, error:'chatgpt_conversation_broker_unavailable' });
+        }
+        const body = await readJson(req);
+        const id = typeof body.id === 'string' ? body.id.trim() : '';
+        const title = typeof body.title === 'string' ? body.title.trim() : '';
+        if (!id || id.length > 160 || title.length > 160) {
+          return json(res, 400, { ok:false, error:'valid_conversation_input_required' });
+        }
+        const result = await this.openChatGPTConversation({ id, title: title || 'Archipelago Chat' });
+        return json(res, result?.ok ? 201 : 422, result ?? {ok:false,error:'conversation_open_failed'});
+      }
+
+      const chatStateMatch = requestUrl.pathname.match(/^\/v1\/chatgpt\/conversation\/([^/]+)$/);
+      if (req.method === 'GET' && chatStateMatch) {
+        if (typeof this.getChatGPTConversation !== 'function') {
+          return json(res, 503, { ok:false, error:'chatgpt_conversation_broker_unavailable' });
+        }
+        const id = decodeURIComponent(chatStateMatch[1]);
+        const conversation = await this.getChatGPTConversation(id);
+        return json(res, conversation ? 200 : 404, conversation ? {ok:true,conversation} : {ok:false,error:'conversation_not_found'});
+      }
+
+      const sendMatch = requestUrl.pathname.match(/^\/v1\/chatgpt\/conversation\/([^/]+)\/send$/);
+      if (req.method === 'POST' && sendMatch) {
+        if (typeof this.sendChatGPTMessage !== 'function') {
+          return json(res, 503, { ok:false, error:'chatgpt_conversation_broker_unavailable' });
+        }
+        const body = await readJson(req);
+        const text = typeof body.text === 'string' ? body.text.trim() : '';
+        if (!text || text.length > 12000) {
+          return json(res, 400, {ok:false,error:'valid_message_required'});
+        }
+        const result = await this.sendChatGPTMessage({ id:decodeURIComponent(sendMatch[1]), text });
+        return json(res, result?.ok ? 200 : 422, result ?? {ok:false,error:'chatgpt_send_failed'});
+      }
+
+      const closeMatch = requestUrl.pathname.match(/^\/v1\/chatgpt\/conversation\/([^/]+)\/close$/);
+      if (req.method === 'POST' && closeMatch) {
+        if (typeof this.closeChatGPTConversation !== 'function') {
+          return json(res, 503, { ok:false, error:'chatgpt_conversation_broker_unavailable' });
+        }
+        const closed = await this.closeChatGPTConversation(decodeURIComponent(closeMatch[1]));
+        return json(res, closed ? 200 : 404, closed ? {ok:true} : {ok:false,error:'conversation_not_found'});
       }
 
       const wc = this.getWorkspaceWebContents();
