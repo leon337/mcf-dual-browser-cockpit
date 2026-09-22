@@ -236,10 +236,16 @@ export class LocalAgentBridge {
             return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
           };
           const norm = (value) => String(value || '').normalize('NFD').replace(/\\p{Diacritic}/gu, '').replace(/\\s+/g, ' ').trim().toLowerCase();
-          const nodes = [...document.querySelectorAll('a,button,[role="button"],[role="link"],[role="option"],[role="menuitem"],summary')].filter(visible);
+          const enabled = (el) =>
+            !el.disabled &&
+            el.getAttribute('aria-disabled') !== 'true' &&
+            !el.hasAttribute('disabled');
+          const nodes = [...document.querySelectorAll('a,button,input[type="button"],input[type="submit"],input[type="reset"],input[type="image"],[role="button"],[role="link"],[role="option"],[role="menuitem"],summary')]
+            .filter((el) => visible(el) && enabled(el));
           const el = nodes.find((node) => {
             const labels = [
               node.innerText,
+              node.value,
               node.getAttribute('aria-label'),
               node.getAttribute('title'),
             ].map(norm).filter(Boolean);
