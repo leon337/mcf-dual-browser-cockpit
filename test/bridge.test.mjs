@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { LocalAgentBridge } from '../src/main/bridge.mjs';
 import { instanceConfig, atomicJson } from '../src/main/instance.mjs';
+import { normalizeAssistantCandidate } from '../src/main/chatgpt-conversation.mjs';
 
 test('profiles reject traversal and isolate atomic state', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-test-'));
@@ -124,4 +125,11 @@ test('ChatGPT conversation bridge routes', async t => {
   const closed = await fetch(base+'/v1/chatgpt/conversation/island-1/close',{method:'POST',headers,body:'{}'});
   assert.equal(closed.status,200);
   assert.equal(conversations.has('island-1'),false);
+});
+
+
+test('guest response labels are stripped before persistence', () => {
+  assert.equal(normalizeAssistantCandidate('ChatGPT said:'), '');
+  assert.equal(normalizeAssistantCandidate('ChatGPT said: LINUX_CLEAN_READY'), 'LINUX_CLEAN_READY');
+  assert.equal(normalizeAssistantCandidate('ChatGPT disse: PRONTO'), 'PRONTO');
 });
