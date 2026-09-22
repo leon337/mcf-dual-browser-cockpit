@@ -435,7 +435,7 @@ export class ChatGPTConversationBroker {
       record.chatgptUrl = win.webContents.getURL();
       record.chatgptConversationId = parseConversationId(record.chatgptUrl);
       record.updatedAt = new Date().toISOString();
-      if (auth.state !== 'SIGNED_IN') {
+      if (auth.state === 'GUEST') {
         record.state = 'AUTH_REQUIRED';
         record.lastError = 'chatgpt_auth_required';
         this.onEvent({level:'error',message:'ChatGPT requer login na partição persist:mcf-chatgpt.'});
@@ -474,7 +474,7 @@ export class ChatGPTConversationBroker {
     const wc = record.window.webContents;
     const auth = await detectAuthState(wc);
     record.authState = auth.state;
-    if (auth.state !== 'SIGNED_IN') {
+    if (auth.state === 'GUEST') {
       record.state = 'AUTH_REQUIRED';
       record.lastError = 'chatgpt_auth_required';
       record.updatedAt = new Date().toISOString();
