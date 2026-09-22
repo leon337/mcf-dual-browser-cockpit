@@ -270,13 +270,26 @@ export class ChatGPTConversationBroker {
     this.records = new Map();
   }
 
-  async open({ id, title = 'Archipelago Chat' } = {}) {
+  async open({ id, title = 'Archipelago Chat', url = null } = {}) {
     const key = String(id || '').trim();
     if (!/^[A-Za-z0-9._:-]{1,160}$/u.test(key)) return {ok:false,error:'valid_conversation_id_required'};
 
     const existing = this.records.get(key);
     if (existing && existing.window && !existing.window.isDestroyed()) {
       return {ok:true,conversation:publicRecord(existing)};
+    }
+
+    let startUrl = this.chatUrl;
+    if (url) {
+      try {
+        const parsed = new URL(String(url));
+        if (parsed.protocol !== 'https:' || parsed.hostname !== 'chatgpt.com' || !(parsed.pathname === '/' || parsed.pathname.startsWith('/c/'))) {
+          return {ok:false,error:'invalid_chatgpt_url'};
+        }
+        startUrl = parsed.href;
+      } catch {
+        return {ok:false,error:'invalid_chatgpt_url'};
+      }
     }
 
     const now = new Date().toISOString();
@@ -320,7 +333,7 @@ export class ChatGPTConversationBroker {
     });
 
     try {
-      await win.loadURL(this.chatUrl);
+      await win.loadURL(startUrl);
       const ready = await composerReady(win.webContents);
       if (!ready) throw new Error('chat_composer_not_found');
       record.state = 'READY';
