@@ -162,10 +162,16 @@ async function conversationSnapshot(wc) {
     const explicitTexts = explicit.map(textOf).filter(Boolean);
     const markdownTexts = markdown.map(textOf).filter(Boolean);
     const turnTexts = turns.map(textOf).filter(Boolean);
-    const stop = [...document.querySelectorAll('button')].some(button => {
+    const buttons = [...document.querySelectorAll('button')];
+    const stop = buttons.some(button => {
       const label = String(button.getAttribute('aria-label') || button.title || button.innerText || '').toLowerCase();
       const testid = String(button.getAttribute('data-testid') || '').toLowerCase();
       return label.includes('stop') || label.includes('parar') || testid.includes('stop');
+    });
+    const completionAction = buttons.some(button => {
+      const label = String(button.getAttribute('aria-label') || button.title || '').toLowerCase();
+      const testid = String(button.getAttribute('data-testid') || '').toLowerCase();
+      return testid === 'copy-turn-action-button' || label.includes('copy response') || label.includes('copiar resposta');
     });
     const composer = document.querySelector('#prompt-textarea') || document.querySelector('textarea') || [...document.querySelectorAll('[contenteditable="true"]')].find(node => {
       const r = node.getBoundingClientRect();
@@ -182,6 +188,7 @@ async function conversationSnapshot(wc) {
       previousTurnText: turnTexts.at(-2) || '',
       composerText: String(composer?.innerText || composer?.value || '').trim(),
       stop,
+      completionAction,
       url: location.href,
       path: location.pathname,
       title: document.title
@@ -233,7 +240,7 @@ async function observeAssistant(wc, before, userText, timeoutMs = 120000) {
         stableText = text;
         stableSince = Date.now();
       }
-      if (!snapshot.stop && Date.now() - stableSince >= 1200) {
+      if (snapshot.completionAction || (!snapshot.stop && Date.now() - stableSince >= 1200)) {
         return { ...snapshot, text };
       }
     }
@@ -245,6 +252,22 @@ async function observeAssistant(wc, before, userText, timeoutMs = 120000) {
   throw error;
 }
 
+function snapshotDiagnostics(snapshot) {
+  if (!snapshot) return null;
+  return {
+    path: snapshot.path || null,
+    assistantCount: Number(snapshot.assistantCount || 0),
+    assistantTextLength: String(snapshot.assistantText || '').length,
+    markdownCount: Number(snapshot.markdownCount || 0),
+    markdownTextLength: String(snapshot.markdownText || '').length,
+    turnCount: Number(snapshot.turnCount || 0),
+    lastTurnTextLength: String(snapshot.lastTurnText || '').length,
+    composerTextLength: String(snapshot.composerText || '').length,
+    stop: Boolean(snapshot.stop),
+    completionAction: Boolean(snapshot.completionAction)
+  };
+}
+
 function publicRecord(record) {
   return {
     id: record.id,
@@ -254,7 +277,8 @@ function publicRecord(record) {
     chatgptConversationId: record.chatgptConversationId,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
-    lastError: record.lastError ?? null
+    lastError: record.lastError ?? null,
+    diagnostics: record.lastDiagnostics ?? null
   };
 }
 
@@ -302,6 +326,7 @@ export class ChatGPTConversationBroker {
       createdAt:now,
       updatedAt:now,
       lastError:null,
+      lastDiagnostics:null,
       window:null
     };
 
@@ -406,6 +431,7 @@ export class ChatGPTConversationBroker {
 
     record.chatgptUrl = ack.snapshot?.url || wc.getURL();
     record.chatgptConversationId = parseConversationId(record.chatgptUrl);
+    record.lastDiagnostics = snapshotDiagnostics(ack.snapshot);
     record.state = 'BUSY';
     record.updatedAt = new Date().toISOString();
     try {
@@ -415,6 +441,7 @@ export class ChatGPTConversationBroker {
       record.state = 'READY';
       record.updatedAt = new Date().toISOString();
       record.lastError = null;
+      record.lastDiagnostics = snapshotDiagnostics(snapshot);
       return {
         ok:true,
         conversation:publicRecord(record),
@@ -429,6 +456,7 @@ export class ChatGPTConversationBroker {
       record.chatgptUrl = record.window?.webContents?.getURL?.() || record.chatgptUrl;
       record.chatgptConversationId = parseConversationId(record.chatgptUrl);
       record.lastError = error.message;
+      record.lastDiagnostics = snapshotDiagnostics(error.diagnostics);
       record.updatedAt = new Date().toISOString();
       return {ok:false,error:error.message,diagnostics:error.diagnostics || null,conversation:publicRecord(record)};
     }
