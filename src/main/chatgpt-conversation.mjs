@@ -14,6 +14,38 @@ function parseConversationId(url) {
   }
 }
 
+async function detectAuthState(wc) {
+  return wc.executeJavaScript(`(() => {
+    const visible = (el) => {
+      if (!el) return false;
+      const r = el.getBoundingClientRect();
+      const s = getComputedStyle(el);
+      return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+    };
+    const norm = (value) => String(value || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const controls = [...document.querySelectorAll('a,button,[role="button"]')].filter(visible);
+    const labels = controls.map(el => norm(el.getAttribute('aria-label') || el.innerText || el.textContent || ''));
+    const guestWords = ['log in','sign in','entrar','fazer login','sign up','criar conta','cadastre-se'];
+    const hasGuestControl = labels.some(label => guestWords.some(word => label === word || label.includes(word)));
+    const profileSelectors = [
+      '[data-testid="profile-button"]',
+      '[data-testid*="profile"]',
+      '[data-testid*="account"]',
+      'button[aria-label*="profile" i]',
+      'button[aria-label*="account" i]',
+      'button[aria-label*="perfil" i]',
+      'button[aria-label*="conta" i]'
+    ];
+    const hasProfile = profileSelectors.some(selector => [...document.querySelectorAll(selector)].some(visible));
+    return {
+      state: hasProfile ? 'SIGNED_IN' : hasGuestControl ? 'GUEST' : 'UNKNOWN',
+      path: location.pathname,
+      hasProfile,
+      hasGuestControl
+    };
+  })()`, true).catch(() => ({state:'UNKNOWN',path:null,hasProfile:false,hasGuestControl:false}));
+}
+
 async function composerReady(wc, timeoutMs = 30000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -278,6 +310,7 @@ function publicRecord(record) {
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     lastError: record.lastError ?? null,
+    authState: record.authState ?? 'UNKNOWN',
     diagnostics: record.lastDiagnostics ?? null
   };
 }
@@ -327,6 +360,7 @@ export class ChatGPTConversationBroker {
       updatedAt:now,
       lastError:null,
       lastDiagnostics:null,
+      authState:'UNKNOWN',
       window:null
     };
 
@@ -361,10 +395,19 @@ export class ChatGPTConversationBroker {
       await win.loadURL(startUrl);
       const ready = await composerReady(win.webContents);
       if (!ready) throw new Error('chat_composer_not_found');
-      record.state = 'READY';
+      const auth = await detectAuthState(win.webContents);
+      record.authState = auth.state;
       record.chatgptUrl = win.webContents.getURL();
       record.chatgptConversationId = parseConversationId(record.chatgptUrl);
       record.updatedAt = new Date().toISOString();
+      if (auth.state !== 'SIGNED_IN') {
+        record.state = 'AUTH_REQUIRED';
+        record.lastError = 'chatgpt_auth_required';
+        this.onEvent({level:'error',message:'ChatGPT requer login na partição persist:mcf-chatgpt.'});
+        return {ok:false,error:'chatgpt_auth_required',conversation:publicRecord(record)};
+      }
+      record.state = 'READY';
+      record.lastError = null;
       this.onEvent({level:'ok',message:`ChatGPT surface READY: ${record.title}`});
       return {ok:true,conversation:publicRecord(record)};
     } catch (error) {
@@ -394,6 +437,14 @@ export class ChatGPTConversationBroker {
     if (!value || value.length > 12000) return {ok:false,error:'valid_message_required'};
 
     const wc = record.window.webContents;
+    const auth = await detectAuthState(wc);
+    record.authState = auth.state;
+    if (auth.state !== 'SIGNED_IN') {
+      record.state = 'AUTH_REQUIRED';
+      record.lastError = 'chatgpt_auth_required';
+      record.updatedAt = new Date().toISOString();
+      return {ok:false,error:'chatgpt_auth_required',delivery:'NOT_SENT',conversation:publicRecord(record)};
+    }
     const beforeSnapshot = await conversationSnapshot(wc) || {assistantCount:0,turnCount:0};
     const prepared = await prepareComposer(wc);
     if (!prepared?.ok) return prepared;
