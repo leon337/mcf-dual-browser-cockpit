@@ -254,6 +254,12 @@ function normalizedComparable(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeAssistantCandidate(value) {
+  return normalizedComparable(value)
+    .replace(/^(?:chatgpt\s+(?:said|disse)|assistant|assistente)\s*:?\s*/i, '')
+    .trim();
+}
+
 function transientResponseText(value) {
   const text = normalizedComparable(value).toLowerCase();
   if (!text) return true;
@@ -299,7 +305,9 @@ function bodyTailCandidate(snapshot, userText) {
     /^copy$/i,
     /^copiar$/i,
     /^share$/i,
-    /^compartilhar$/i
+    /^compartilhar$/i,
+    /^chatgpt\s+(?:said|disse)\s*:?$/i,
+    /^(?:assistant|assistente)\s*:?$/i
   ];
   const lines = after.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   return lines.find(line => line !== user && line.length > 0 && line.length < 12000 && !noise.some(rx => rx.test(line))) || '';
@@ -318,7 +326,7 @@ function responseCandidate(snapshot, before, userText) {
     snapshot.assistantText !== beforeAssistant ? snapshot.assistantText : '',
     snapshot.markdownText !== beforeMarkdown ? snapshot.markdownText : '',
     bodyTailCandidate(snapshot, userText)
-  ].map(value => withoutUserEcho(value, userText)).filter(Boolean);
+  ].map(value => normalizeAssistantCandidate(withoutUserEcho(value, userText))).filter(Boolean);
 
   return candidates.find(text => {
     if (!text || transientResponseText(text)) return false;
@@ -626,4 +634,4 @@ export class ChatGPTConversationBroker {
   }
 }
 
-export { parseConversationId };
+export { parseConversationId, normalizeAssistantCandidate };
