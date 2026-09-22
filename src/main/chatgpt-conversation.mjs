@@ -200,11 +200,17 @@ async function conversationSnapshot(wc) {
       const testid = String(button.getAttribute('data-testid') || '').toLowerCase();
       return label.includes('stop') || label.includes('parar') || testid.includes('stop');
     });
-    const completionAction = buttons.some(button => {
+    const completionButtons = buttons.filter(button => {
       const label = String(button.getAttribute('aria-label') || button.title || '').toLowerCase();
       const testid = String(button.getAttribute('data-testid') || '').toLowerCase();
       return testid === 'copy-turn-action-button' || label.includes('copy response') || label.includes('copiar resposta');
     });
+    const completionAction = completionButtons.length > 0;
+    const completionTurnTexts = completionButtons.map(button => {
+      const turn = button.closest('[data-testid^="conversation-turn-"],article');
+      return textOf(turn);
+    }).filter(Boolean);
+    const bodyText = String(document.body?.innerText || '').slice(-30000);
     const composer = document.querySelector('#prompt-textarea') || document.querySelector('textarea') || [...document.querySelectorAll('[contenteditable="true"]')].find(node => {
       const r = node.getBoundingClientRect();
       const s = getComputedStyle(node);
@@ -221,6 +227,8 @@ async function conversationSnapshot(wc) {
       composerText: String(composer?.innerText || composer?.value || '').trim(),
       stop,
       completionAction,
+      completionTurnText: completionTurnTexts.at(-1) || '',
+      bodyText,
       url: location.href,
       path: location.pathname,
       title: document.title
@@ -232,6 +240,28 @@ function normalizedComparable(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function bodyTailCandidate(snapshot, userText) {
+  const body = String(snapshot?.bodyText || '');
+  const user = String(userText || '').trim();
+  if (!body || !user) return '';
+  const index = body.lastIndexOf(user);
+  if (index < 0) return '';
+  const after = body.slice(index + user.length);
+  const noise = [
+    /chatgpt can make mistakes/i,
+    /o chatgpt pode cometer erros/i,
+    /conte[uú]do interativo/i,
+    /n[aã]o foi poss[ií]vel carregar os detalhes/i,
+    /tentar novamente/i,
+    /^copy$/i,
+    /^copiar$/i,
+    /^share$/i,
+    /^compartilhar$/i
+  ];
+  const lines = after.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  return lines.find(line => line !== user && line.length > 0 && line.length < 12000 && !noise.some(rx => rx.test(line))) || '';
+}
+
 function responseCandidate(snapshot, before, userText) {
   if (!snapshot) return '';
   const user = normalizedComparable(userText);
@@ -240,9 +270,11 @@ function responseCandidate(snapshot, before, userText) {
   const candidates = [
     snapshot.assistantCount > (before?.assistantCount || 0) ? snapshot.assistantText : '',
     snapshot.markdownCount > (before?.markdownCount || 0) ? snapshot.markdownText : '',
+    snapshot.completionTurnText || '',
     snapshot.turnCount > (before?.turnCount || 0) ? snapshot.lastTurnText : '',
     snapshot.assistantText !== beforeAssistant ? snapshot.assistantText : '',
-    snapshot.markdownText !== beforeMarkdown ? snapshot.markdownText : ''
+    snapshot.markdownText !== beforeMarkdown ? snapshot.markdownText : '',
+    bodyTailCandidate(snapshot, userText)
   ].map(normalizedComparable).filter(Boolean);
 
   return candidates.find(text => {
@@ -296,7 +328,9 @@ function snapshotDiagnostics(snapshot) {
     lastTurnTextLength: String(snapshot.lastTurnText || '').length,
     composerTextLength: String(snapshot.composerText || '').length,
     stop: Boolean(snapshot.stop),
-    completionAction: Boolean(snapshot.completionAction)
+    completionAction: Boolean(snapshot.completionAction),
+    completionTurnTextLength: String(snapshot.completionTurnText || '').length,
+    bodyTextLength: String(snapshot.bodyText || '').length
   };
 }
 
@@ -340,7 +374,7 @@ export class ChatGPTConversationBroker {
     if (url) {
       try {
         const parsed = new URL(String(url));
-        if (parsed.protocol !== 'https:' || parsed.hostname !== 'chatgpt.com' || !(parsed.pathname === '/' || parsed.pathname.startsWith('/c/'))) {
+        if (parsed.protocol !== 'https:' || parsed.hostname !== 'chatgpt.com' || !(parsed.pathname === '/' || parsed.pathname.startsWith('/c/') || parsed.pathname.startsWith('/uc/'))) {
           return {ok:false,error:'invalid_chatgpt_url'};
         }
         startUrl = parsed.href;
@@ -378,7 +412,8 @@ export class ChatGPTConversationBroker {
         nodeIntegration:false,
         webSecurity:true,
         devTools:true,
-        autoplayPolicy:'no-user-gesture-required'
+        autoplayPolicy:'no-user-gesture-required',
+        backgroundThrottling:false
       }
     });
     record.window = win;
