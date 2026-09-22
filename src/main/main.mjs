@@ -372,6 +372,7 @@ function createWindow() {
   bridge = new LocalAgentBridge({
     getWorkspaceWebContents: () => workspaceView?.webContents ?? null,
     captureDir,
+    captureWorkspace,
     onEvent: emitBridgeEvent,
   });
 
@@ -410,6 +411,18 @@ function getPane(pane) {
   if (pane === 'chat') return chatView?.webContents ?? null;
   if (pane === 'workspace') return workspaceView?.webContents ?? null;
   return null;
+}
+
+async function captureWorkspace() {
+  const wc = workspaceView?.webContents;
+  if (!wc || wc.isDestroyed()) return { ok: false, error: 'workspace_unavailable' };
+  const dir = path.join(app.getPath('pictures'), 'MCF-Cockpit-Captures');
+  mkdirSync(dir, { recursive: true });
+  const output = path.join(dir, `workspace-${Date.now()}.png`);
+  const image = await wc.capturePage();
+  writeFileSync(output, image.toPNG());
+  emitBridgeEvent({ level: 'ok', message: `Captura salva: ${output}` });
+  return { ok: true, path: output };
 }
 
 ipcMain.handle('layout:set-split', (_event, ratio) => {

@@ -93,9 +93,10 @@ function pageSelectorScript() {
 }
 
 export class LocalAgentBridge {
-  constructor({ getWorkspaceWebContents, captureDir, onEvent = () => {} }) {
+  constructor({ getWorkspaceWebContents, captureDir, captureWorkspace = null, onEvent = () => {} }) {
     this.getWorkspaceWebContents = getWorkspaceWebContents;
     this.captureDir = captureDir;
+    this.captureWorkspace = captureWorkspace;
     this.onEvent = onEvent;
     this.server = null;
     this.port = null;
@@ -211,6 +212,45 @@ export class LocalAgentBridge {
         else if (body.action === 'stop') wc.stop();
         else return json(res, 400, { ok: false, error: 'invalid_or_unavailable_action' });
         return json(res, 200, { ok: true });
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/find-click') {
+        const body = await readJson(req);
+        if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 240) {
+          return json(res, 400, { ok: false, error: 'text_required' });
+        }
+        const script = `(() => {
+          const needle = ${JSON.stringify(body.text)}.normalize('NFD').replace(/\\p{Diacritic}/gu, '').trim().toLowerCase();
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const s = getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+          };
+          const norm = (value) => String(value || '').normalize('NFD').replace(/\\p{Diacritic}/gu, '').replace(/\\s+/g, ' ').trim().toLowerCase();
+          const nodes = [...document.querySelectorAll('a,button,[role="button"],[role="link"],[role="option"],[role="menuitem"],summary')].filter(visible);
+          const el = nodes.find((node) => {
+            const hay = norm(node.innerText || node.getAttribute('aria-label') || node.getAttribute('title') || '');
+            return hay.includes(needle);
+          });
+          if (!el) return {ok:false,error:'not_found'};
+          el.scrollIntoView({block:'center',inline:'center'});
+          el.focus?.();
+          el.click();
+          return {ok:true,clicked:true};
+        })()`;
+
+        const frames = wc.mainFrame?.framesInSubtree ?? [];
+        let framesChecked = 0;
+        for (const frame of frames) {
+          try {
+            framesChecked += 1;
+            const result = await frame.executeJavaScript(script, true);
+            if (result?.ok) {
+              return json(res, 200, { ok: true, clicked: true, framesChecked });
+            }
+          } catch {}
+        }
+        return json(res, 404, { ok: false, error: 'not_found', framesChecked });
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/v1/click') {
