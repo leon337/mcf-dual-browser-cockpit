@@ -25,8 +25,11 @@ async function detectAuthState(wc) {
     const norm = (value) => String(value || '').normalize('NFD').replace(/\p{Diacritic}/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
     const controls = [...document.querySelectorAll('a,button,[role="button"]')].filter(visible);
     const labels = controls.map(el => norm(el.getAttribute('aria-label') || el.innerText || el.textContent || ''));
-    const guestWords = ['log in','sign in','entrar','fazer login','sign up','criar conta','cadastre-se'];
-    const hasGuestControl = labels.some(label => guestWords.some(word => label === word || label.includes(word)));
+    const body = norm(document.body?.innerText || '');
+    const guestWords = ['log in','sign in','entrar','fazer login','sign up','criar conta','cadastre-se','cadastre se'];
+    const hasGuestControl =
+      labels.some(label => guestWords.some(word => label === word || label.includes(word))) ||
+      guestWords.some(word => body.includes(word));
     const profileSelectors = [
       '[data-testid="profile-button"]',
       '[data-testid*="profile"]',
@@ -367,7 +370,24 @@ export class ChatGPTConversationBroker {
 
     const existing = this.records.get(key);
     if (existing && existing.window && !existing.window.isDestroyed()) {
-      return {ok:true,conversation:publicRecord(existing)};
+      if (existing.state === 'AUTH_REQUIRED') {
+        const auth = await detectAuthState(existing.window.webContents);
+        existing.authState = auth.state;
+        existing.updatedAt = new Date().toISOString();
+        if (auth.state === 'GUEST') {
+          existing.window.show();
+          existing.window.focus();
+          return {ok:false,error:'chatgpt_auth_required',conversation:publicRecord(existing)};
+        }
+        const ready = await composerReady(existing.window.webContents, 8000);
+        if (!ready) return {ok:false,error:'chat_composer_not_found',conversation:publicRecord(existing)};
+        existing.state = 'READY';
+        existing.lastError = null;
+        existing.chatgptUrl = existing.window.webContents.getURL();
+        existing.chatgptConversationId = parseConversationId(existing.chatgptUrl);
+        existing.window.hide();
+      }
+      return {ok:existing.state === 'READY',conversation:publicRecord(existing),...(existing.state === 'READY' ? {} : {error:existing.lastError || 'conversation_not_ready'})};
     }
 
     let startUrl = this.chatUrl;
@@ -438,6 +458,8 @@ export class ChatGPTConversationBroker {
       if (auth.state === 'GUEST') {
         record.state = 'AUTH_REQUIRED';
         record.lastError = 'chatgpt_auth_required';
+        win.show();
+        win.focus();
         this.onEvent({level:'error',message:'ChatGPT requer login na partição persist:mcf-chatgpt.'});
         return {ok:false,error:'chatgpt_auth_required',conversation:publicRecord(record)};
       }
