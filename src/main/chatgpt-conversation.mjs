@@ -102,40 +102,64 @@ async function clickSend(wc) {
   })()`, true).catch(error => ({ok:false,error:error.message}));
 }
 
-async function observeAssistant(wc, beforeCount, timeoutMs = 120000) {
+async function conversationSnapshot(wc) {
+  return wc.executeJavaScript(`(() => {
+    const explicit = [
+      ...document.querySelectorAll('[data-message-author-role="assistant"]'),
+      ...document.querySelectorAll('[data-turn="assistant"]'),
+      ...document.querySelectorAll('[data-author="assistant"]')
+    ];
+    const assistantNodes = [...new Set(explicit)];
+    const assistantTexts = assistantNodes.map(node => String(node.innerText || '').trim()).filter(Boolean);
+    const turns = [...document.querySelectorAll('[data-testid^="conversation-turn-"], article')];
+    const turnTexts = turns.map(node => String(node.innerText || '').trim()).filter(Boolean);
+    const stop = [...document.querySelectorAll('button')].some(button => {
+      const label = String(button.getAttribute('aria-label') || button.title || button.innerText || '').toLowerCase();
+      const testid = String(button.getAttribute('data-testid') || '').toLowerCase();
+      return label.includes('stop') || label.includes('parar') || testid.includes('stop');
+    });
+    return {
+      assistantCount: assistantNodes.length,
+      turnCount: turns.length,
+      assistantText: assistantTexts.at(-1) || '',
+      lastTurnText: turnTexts.at(-1) || '',
+      stop,
+      url: location.href,
+      path: location.pathname,
+      title: document.title
+    };
+  })()`, true).catch(() => null);
+}
+
+async function observeAssistant(wc, before, timeoutMs = 120000) {
   const deadline = Date.now() + timeoutMs;
   let stableText = '';
   let stableSince = 0;
+  let lastSnapshot = null;
   while (Date.now() < deadline) {
     if (wc.isDestroyed()) throw new Error('chat_surface_destroyed');
-    const snapshot = await wc.executeJavaScript(`(() => {
-      const assistantNodes = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
-      const texts = assistantNodes.map(node => String(node.innerText || '').trim()).filter(Boolean);
-      const stop = [...document.querySelectorAll('button')].some(button => {
-        const label = String(button.getAttribute('aria-label') || button.title || button.innerText || '').toLowerCase();
-        return label.includes('stop') || label.includes('parar');
-      });
-      return {
-        count: assistantNodes.length,
-        text: texts.at(-1) || '',
-        stop,
-        url: location.href,
-        title: document.title
-      };
-    })()`, true).catch(() => null);
+    const snapshot = await conversationSnapshot(wc);
+    if (snapshot) lastSnapshot = snapshot;
+    const explicitReady = snapshot && snapshot.assistantCount > before.assistantCount;
+    const turnReady = snapshot && snapshot.turnCount >= before.turnCount + 2;
+    const text = snapshot ? (snapshot.assistantText || (turnReady ? snapshot.lastTurnText : '')) : '';
 
-    if (snapshot && snapshot.count > beforeCount && snapshot.text) {
-      if (snapshot.text === stableText) {
+    if ((explicitReady || turnReady) && text) {
+      if (text === stableText) {
         if (!stableSince) stableSince = Date.now();
       } else {
-        stableText = snapshot.text;
+        stableText = text;
         stableSince = Date.now();
       }
-      if (!snapshot.stop && Date.now() - stableSince >= 1400) return snapshot;
+      if (!snapshot.stop && Date.now() - stableSince >= 1200) {
+        return { ...snapshot, text };
+      }
     }
     await sleep(350);
   }
-  throw new Error('chatgpt_response_timeout');
+  const error = new Error('chatgpt_response_timeout');
+  error.diagnostics = lastSnapshot;
+  throw error;
 }
 
 function publicRecord(record) {
@@ -249,7 +273,7 @@ export class ChatGPTConversationBroker {
     if (!value || value.length > 12000) return {ok:false,error:'valid_message_required'};
 
     const wc = record.window.webContents;
-    const beforeCount = await wc.executeJavaScript(`document.querySelectorAll('[data-message-author-role="assistant"]').length`, true).catch(() => 0);
+    const beforeSnapshot = await conversationSnapshot(wc) || {assistantCount:0,turnCount:0};
     const prepared = await prepareComposer(wc);
     if (!prepared?.ok) return prepared;
 
@@ -266,7 +290,7 @@ export class ChatGPTConversationBroker {
     record.state = 'BUSY';
     record.updatedAt = new Date().toISOString();
     try {
-      const snapshot = await observeAssistant(wc, beforeCount);
+      const snapshot = await observeAssistant(wc, beforeSnapshot);
       record.chatgptUrl = snapshot.url || wc.getURL();
       record.chatgptConversationId = parseConversationId(record.chatgptUrl);
       record.state = 'READY';
@@ -283,9 +307,11 @@ export class ChatGPTConversationBroker {
       };
     } catch (error) {
       record.state = 'READY';
+      record.chatgptUrl = record.window?.webContents?.getURL?.() || record.chatgptUrl;
+      record.chatgptConversationId = parseConversationId(record.chatgptUrl);
       record.lastError = error.message;
       record.updatedAt = new Date().toISOString();
-      return {ok:false,error:error.message,conversation:publicRecord(record)};
+      return {ok:false,error:error.message,diagnostics:error.diagnostics || null,conversation:publicRecord(record)};
     }
   }
 
