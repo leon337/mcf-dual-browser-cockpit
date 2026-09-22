@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LocalAgentBridge } from './bridge.mjs';
 import { instanceConfig, atomicJson } from './instance.mjs';
+import { ChatGPTConversationBroker } from './chatgpt-conversation.mjs';
 
 const instance = instanceConfig(process.argv, app.getPath('userData'));
 mkdirSync(instance.userData, { recursive: true, mode: 0o700 });
@@ -35,6 +36,7 @@ const agentSessionWindows = new Map();
 const agentSessionRuntime = new Map();
 let splitRatio = 0.5;
 let bridge = null;
+let chatGPTConversationBroker = null;
 let restoredRuntimeState = null;
 let runtimePersistTimer = null;
 const RUNTIME_STATE_VERSION = 1;
@@ -760,6 +762,12 @@ function createWindow() {
   const captureDir = path.join(app.getPath('pictures'), 'MCF-Cockpit-Captures');
   const uploadDir = path.join(app.getPath('userData'), 'approved-uploads');
   mkdirSync(uploadDir, { recursive: true });
+  chatGPTConversationBroker = new ChatGPTConversationBroker({
+    partition: 'persist:mcf-chatgpt',
+    chatUrl: CHATGPT_URL,
+    onEvent: emitBridgeEvent,
+  });
+
   bridge = new LocalAgentBridge({
     getWorkspaceWebContents: activeWorkspaceWebContents,
     captureDir,
@@ -768,6 +776,10 @@ function createWindow() {
     captureWorkspace,
     openAgentSession,
     listAgentSessions,
+    openChatGPTConversation: (input) => chatGPTConversationBroker.open(input),
+    getChatGPTConversation: (id) => chatGPTConversationBroker.get(id),
+    sendChatGPTMessage: (input) => chatGPTConversationBroker.send(input),
+    closeChatGPTConversation: (id) => chatGPTConversationBroker.close(id),
     onEvent: emitBridgeEvent,
   });
 
@@ -803,6 +815,8 @@ function createWindow() {
       if (win && !win.isDestroyed()) win.close();
     }
     agentSessionWindows.clear();
+    chatGPTConversationBroker?.closeAll();
+    chatGPTConversationBroker = null;
     mainWindow = null;
   });
 }
@@ -942,6 +956,7 @@ app.on('activate', () => {
 app.on('before-quit', async () => {
   if (runtimePersistTimer) { clearTimeout(runtimePersistTimer); runtimePersistTimer = null; }
   try { persistRuntimeState(); } catch {}
+  chatGPTConversationBroker?.closeAll();
   await bridge?.stop().catch(() => {});
 });
 
