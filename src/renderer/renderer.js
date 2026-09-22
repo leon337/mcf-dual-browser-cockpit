@@ -66,11 +66,16 @@ async function navigateWorkspace() {
 
 async function refreshBridge() {
   const state = await api.bridge.getState();
+  document.getElementById('instanceLabel').textContent = `INSTÂNCIA: ${state.instanceId} · LEANDRO + MESTRE`;
+  const pauseButton = document.getElementById('pauseBridgeButton');
+  pauseButton.textContent = state.paused ? 'RETOMAR' : 'PAUSAR';
+  pauseButton.setAttribute('aria-pressed', String(state.paused));
+  pauseButton.disabled = !state.enabled;
   bridgeButton.classList.toggle('on', state.enabled);
   bridgeButton.querySelector('span:last-child').textContent = state.enabled ? `AGENT BRIDGE · ${state.port}` : 'AGENT BRIDGE OFF';
   copyTokenButton.classList.toggle('hidden', !state.enabled);
   if (state.enabled) activity.textContent = `Bridge local: 127.0.0.1:${state.port} · token efêmero`;
-  else activity.textContent = 'Cockpit local · Bridge desativada por padrão';
+  else activity.textContent = 'Cockpit local · Bridge desligada';
 }
 
 document.querySelectorAll('[data-pane][data-action]').forEach(button => {
@@ -161,3 +166,11 @@ api.bridge.onEvent(event => {
   renderState('workspace', initial.workspace);
   await refreshBridge();
 })();
+
+document.getElementById('pauseBridgeButton').addEventListener('click', async () => {
+  try {
+    const state = await api.bridge.pause();
+    await refreshBridge();
+    setToast(state.paused ? 'Novas ações pausadas. A ação em curso pode terminar.' : 'Automação retomada.');
+  } catch { setToast('Não foi possível pausar a automação.', 'error'); }
+});

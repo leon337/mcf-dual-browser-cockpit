@@ -2,13 +2,23 @@ import { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, session
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { LocalAgentBridge } from './bridge.mjs';
+import { instanceConfig, atomicJson } from './instance.mjs';
+
+const instance = instanceConfig(process.argv, app.getPath('userData'));
+mkdirSync(instance.userData, { recursive: true, mode: 0o700 });
+app.setPath('userData', instance.userData);
+const ownsInstance = app.requestSingleInstanceLock();
+if (!ownsInstance) app.exit(0);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const SRC_ROOT = path.resolve(__dirname, '..');
 const PRELOAD = path.join(SRC_ROOT, 'preload', 'preload.cjs');
 const RENDERER = path.join(SRC_ROOT, 'renderer', 'index.html');
+const execFileAsync = promisify(execFile);
 
 const HEADER_HEIGHT = 124;
 const STATUS_HEIGHT = 28;
@@ -20,6 +30,9 @@ const WORKSPACE_URL = 'https://www.google.com/';
 let mainWindow = null;
 let chatView = null;
 let workspaceView = null;
+let workspaceAuxWindow = null;
+const agentSessionWindows = new Map();
+const agentSessionRuntime = new Map();
 let splitRatio = 0.5;
 let bridge = null;
 let restoredRuntimeState = null;
@@ -86,8 +99,7 @@ function persistBridgeState(state) {
   const payload = state?.enabled
     ? state
     : { enabled: false, host: '127.0.0.1', port: null, token: null };
-  writeFileSync(output, JSON.stringify(payload, null, 2), { encoding: 'utf8', mode: 0o600 });
-  chmodSync(output, 0o600);
+  atomicJson(output, { ...payload, instanceId: instance.id, pid: process.pid, version: app.getVersion() });
 }
 
 
@@ -164,12 +176,7 @@ function persistRuntimeState() {
   const state = snapshotRuntimeState();
   if (!state) return null;
   const file = runtimeStateFile();
-  const temp = file + '.tmp';
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(temp, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 });
-  chmodSync(temp, 0o600);
-  renameSync(temp, file);
-  chmodSync(file, 0o600);
+  atomicJson(file, state);
   restoredRuntimeState = state;
   return state;
 }
@@ -225,7 +232,7 @@ function secureWebContents(key, view, partition) {
     let parsed;
     try { parsed = new URL(url); } catch { return { action: 'deny' }; }
     if (!['http:', 'https:'].includes(parsed.protocol)) {
-      shell.openExternal(url).catch(() => {});
+      emitBridgeEvent({ level: 'info', message: 'Protocolo externo bloqueado.' });
       return { action: 'deny' };
     }
 
@@ -246,12 +253,33 @@ function secureWebContents(key, view, partition) {
     };
   });
 
+  if (key === 'workspace') {
+    wc.on('did-create-window', (childWindow) => {
+      workspaceAuxWindow = childWindow;
+      childWindow.webContents.setAudioMuted(false);
+      emitBridgeEvent({
+        level: 'info',
+        message: 'Workspace auxiliar detectado: ' + (childWindow.webContents.getTitle() || 'janela web'),
+      });
+      childWindow.webContents.on('page-title-updated', () => {
+        emitBridgeEvent({
+          level: 'info',
+          message: 'Workspace auxiliar: ' + (childWindow.webContents.getTitle() || 'janela web'),
+        });
+      });
+      childWindow.on('closed', () => {
+        if (workspaceAuxWindow === childWindow) workspaceAuxWindow = null;
+        emitBridgeEvent({ level: 'info', message: 'Workspace auxiliar fechado.' });
+      });
+    });
+  }
+
   wc.on('will-navigate', (event, url) => {
     try {
       const parsed = new URL(url);
       if (!['http:', 'https:'].includes(parsed.protocol)) {
         event.preventDefault();
-        shell.openExternal(url).catch(() => {});
+        emitBridgeEvent({ level: 'info', message: 'Protocolo externo bloqueado.' });
       }
     } catch {
       event.preventDefault();
@@ -270,10 +298,371 @@ function secureWebContents(key, view, partition) {
   });
   wc.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!isMainFrame || errorCode === -3) return;
-    emitBridgeEvent({ level: 'error', message: `${key}: falha ao abrir ${validatedURL} — ${errorDescription}` });
+    emitBridgeEvent({ level: 'error', message: `${key}: falha de carregamento (${errorCode}).` });
   });
 }
 
+
+function agentSessionToolPath() {
+  const configured = String(process.env.MCF_AGENT_SESSION_TOOL || '').trim();
+  if (configured) return configured;
+  return path.join(app.getPath('home'), '.local', 'bin', 'mcf-agent-session');
+}
+
+async function runAgentSessionTool(args) {
+  const tool = agentSessionToolPath();
+  if (!existsSync(tool)) throw new Error('mcf_agent_session_tool_missing');
+  const { stdout } = await execFileAsync(tool, args, {
+    timeout: 15000,
+    maxBuffer: 2 * 1024 * 1024,
+    env: { ...process.env },
+  });
+  const output = String(stdout || '').trim();
+  if (!output) throw new Error('mcf_agent_session_empty_response');
+  try {
+    return JSON.parse(output);
+  } catch {
+    throw new Error('mcf_agent_session_invalid_json');
+  }
+}
+
+function publicAgentSession(record) {
+  return {
+    sessionId: record.sessionId,
+    traceId: record.traceId,
+    missionId: record.missionId ?? null,
+    agentId: record.agentId,
+    displayName: record.displayName,
+    role: record.role,
+    contractRef: record.contractRef,
+    contractDigest: record.contractDigest,
+    surface: record.surface,
+    surfaceState: record.surfaceState,
+    chatUrl: record.chatUrl ?? null,
+    windowOpen: Boolean(record.windowOpen),
+    bootstrapSent: Boolean(record.bootstrapSent),
+    bootstrapError: record.bootstrapError ?? null,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
+async function listAgentSessions() {
+  const persisted = await runAgentSessionTool(['list-sessions', '--limit', '100']);
+  const sessions = Array.isArray(persisted?.sessions) ? persisted.sessions : [];
+  return sessions.map((session) => {
+    const runtime = agentSessionRuntime.get(session.sessionId);
+    return publicAgentSession({
+      ...session,
+      windowOpen: runtime ? runtime.windowOpen : false,
+      bootstrapSent: runtime ? runtime.bootstrapSent : session.surfaceState === 'OPEN',
+      bootstrapError: runtime?.bootstrapError ?? null,
+    });
+  });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForChatComposer(wc, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (wc.isDestroyed()) return false;
+    const found = await wc.executeJavaScript(`(() => {
+      const visible = (el) => {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
+      };
+      const nodes = [
+        document.querySelector('#prompt-textarea'),
+        document.querySelector('textarea'),
+        ...document.querySelectorAll('[contenteditable="true"]')
+      ].filter(Boolean);
+      return nodes.some(visible);
+    })()`, true).catch(() => false);
+    if (found) return true;
+    await sleep(500);
+  }
+  return false;
+}
+
+async function injectAgentBootstrap(wc, bootstrap) {
+  const ready = await waitForChatComposer(wc);
+  if (!ready) return { ok: false, error: 'chat_composer_not_found' };
+
+  const prepared = await wc.executeJavaScript(`(() => {
+    const visible = (el) => {
+      if (!el) return false;
+      const r = el.getBoundingClientRect();
+      const s = getComputedStyle(el);
+      return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
+    };
+    const nodes = [
+      document.querySelector('#prompt-textarea'),
+      document.querySelector('textarea'),
+      ...document.querySelectorAll('[contenteditable="true"]')
+    ].filter(Boolean);
+    const el = nodes.find(visible);
+    if (!el) return { ok:false, error:'chat_composer_not_found' };
+    el.focus();
+    if (el.isContentEditable) {
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      try { document.execCommand('delete', false); } catch {}
+      if ((el.innerText || '').trim()) el.textContent = '';
+    } else if ('value' in el) {
+      const proto = Object.getPrototypeOf(el);
+      const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+      if (descriptor?.set) descriptor.set.call(el, '');
+      else el.value = '';
+      el.dispatchEvent(new InputEvent('input', { bubbles:true, inputType:'deleteContentBackward', data:null }));
+    } else {
+      return { ok:false, error:'chat_composer_not_editable' };
+    }
+    return { ok:true };
+  })()`, true);
+
+  if (!prepared?.ok) return prepared ?? { ok: false, error: 'chat_composer_prepare_failed' };
+
+  try {
+    await wc.insertText(bootstrap);
+  } catch (error) {
+    return { ok: false, error: 'chat_native_insert_failed', detail: error.message };
+  }
+
+  await sleep(700);
+  const typed = await wc.executeJavaScript(`(() => {
+    const visible = (el) => {
+      if (!el) return false;
+      const r = el.getBoundingClientRect();
+      const s = getComputedStyle(el);
+      return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
+    };
+    const nodes = [
+      document.querySelector('#prompt-textarea'),
+      document.querySelector('textarea'),
+      ...document.querySelectorAll('[contenteditable="true"]')
+    ].filter(Boolean);
+    const el = nodes.find(visible);
+    const text = el ? String(el.innerText || el.value || '') : '';
+    return {
+      ok: Boolean(el) && text.includes('[MCF AGENT SESSION]'),
+      length: text.length,
+      hasMarker: text.includes('[MCF AGENT SESSION]')
+    };
+  })()`, true);
+
+  if (!typed?.ok) return { ok: false, error: 'chat_native_insert_not_observed', typed };
+
+  const sent = await wc.executeJavaScript(`(() => {
+    const visible = (el) => {
+      if (!el) return false;
+      const r = el.getBoundingClientRect();
+      const s = getComputedStyle(el);
+      return r.width > 10 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
+    };
+    const direct = document.querySelector('[data-testid="send-button"]');
+    const buttons = [...document.querySelectorAll('button')].filter(visible);
+    const send = direct || buttons.find((button) => {
+      const label = String(button.getAttribute('aria-label') || button.title || button.innerText || '').toLowerCase();
+      return (label.includes('send') || label.includes('enviar')) && !button.disabled;
+    });
+    if (send && !send.disabled) {
+      send.click();
+      return {ok:true, method:'button'};
+    }
+    const composer = document.querySelector('#prompt-textarea') || document.querySelector('textarea') || [...document.querySelectorAll('[contenteditable="true"]')].find(visible);
+    const form = composer?.closest('form');
+    if (form?.requestSubmit) {
+      form.requestSubmit();
+      return {ok:true, method:'form'};
+    }
+    return {ok:false,error:'chat_send_control_not_found'};
+  })()`, true);
+
+  if (!sent?.ok) return sent ?? { ok: false, error: 'chat_send_failed' };
+
+  const sessionId = bootstrap.match(/^session_id:\s*(\S+)/m)?.[1] || '';
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    const evidence = await wc.executeJavaScript(`(() => {
+      const body = document.body?.innerText || '';
+      return {
+        path: location.pathname,
+        title: document.title,
+        hasSession: ${JSON.stringify(sessionId)} ? body.includes(${JSON.stringify(sessionId)}) : false,
+        hasUserTurn: body.includes('You said:') || body.includes('Você disse:') || body.includes('[MCF AGENT SESSION]')
+      };
+    })()`, true).catch(() => null);
+
+    if (evidence && (String(evidence.path || '').startsWith('/c/') || (evidence.hasSession && evidence.hasUserTurn))) {
+      return { ok: true, typed, sent, evidence };
+    }
+    await sleep(500);
+  }
+
+  return { ok: false, error: 'chat_conversation_not_created', typed, sent };
+}
+
+async function markAgentSessionOpen(sessionId, chatUrl) {
+  try {
+    return await runAgentSessionTool([
+      'mark-open',
+      '--session', sessionId,
+      ...(chatUrl ? ['--chat-url', chatUrl] : []),
+    ]);
+  } catch (error) {
+    emitBridgeEvent({ level: 'error', message: 'Agent Session: falha ao persistir abertura — ' + error.message });
+    return null;
+  }
+}
+
+async function markAgentSessionFailed(sessionId, errorMessage) {
+  try {
+    return await runAgentSessionTool([
+      'mark-failed',
+      '--session', sessionId,
+      '--error', String(errorMessage || 'agent_session_open_failed').slice(0, 500),
+    ]);
+  } catch (error) {
+    emitBridgeEvent({ level: 'error', message: 'Agent Session: falha ao persistir erro — ' + error.message });
+    return null;
+  }
+}
+
+function secureAgentWindow(win) {
+  const wc = win.webContents;
+  wc.setAudioMuted(false);
+  wc.setWindowOpenHandler(({ url }) => {
+    try {
+      const parsed = new URL(url);
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        emitBridgeEvent({ level: 'info', message: 'Protocolo externo bloqueado.' });
+        return { action: 'deny' };
+      }
+    } catch {
+      return { action: 'deny' };
+    }
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        width: 1080,
+        height: 760,
+        backgroundColor: '#0b0f14',
+        webPreferences: {
+          partition: 'persist:mcf-chatgpt',
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+          webSecurity: true,
+        },
+      },
+    };
+  });
+}
+
+async function openAgentSession({ agent, mission = null, objective = null }) {
+  let created;
+  try {
+    const args = ['create', '--agent', agent, '--surface', 'chatgpt'];
+    if (mission) args.push('--mission', mission);
+    if (objective) args.push('--objective', objective);
+    created = await runAgentSessionTool(args);
+  } catch (error) {
+    emitBridgeEvent({ level: 'error', message: 'Agent Session rejeitada: ' + error.message });
+    return { ok: false, error: error.message };
+  }
+
+  if (!created?.sessionId || !created?.agentId || !created?.bootstrap) {
+    return { ok: false, error: 'invalid_agent_session_record' };
+  }
+
+  const record = {
+    ...created,
+    windowOpen: false,
+    bootstrapSent: false,
+    bootstrapError: null,
+  };
+  agentSessionRuntime.set(created.sessionId, record);
+
+  const win = new BrowserWindow({
+    width: 1160,
+    height: 820,
+    minWidth: 760,
+    minHeight: 560,
+    title: `MCF · ${created.agentId} · Agent Session`,
+    backgroundColor: '#090d12',
+    show: false,
+    autoHideMenuBar: true,
+    webPreferences: {
+      partition: 'persist:mcf-chatgpt',
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      webSecurity: true,
+      devTools: true,
+      autoplayPolicy: 'no-user-gesture-required',
+    },
+  });
+  secureAgentWindow(win);
+  agentSessionWindows.set(created.sessionId, win);
+
+  win.once('ready-to-show', () => {
+    win.show();
+    win.focus();
+    record.windowOpen = true;
+    record.updatedAt = new Date().toISOString();
+  });
+
+  win.on('closed', () => {
+    record.windowOpen = false;
+    record.surfaceState = 'CLOSED';
+    record.updatedAt = new Date().toISOString();
+    agentSessionWindows.delete(created.sessionId);
+    emitBridgeEvent({ level: 'info', message: `Sessão de agente fechada: ${created.agentId}` });
+  });
+
+  try {
+    await win.loadURL(CHATGPT_URL);
+    const injected = await injectAgentBootstrap(win.webContents, created.bootstrap);
+    if (!injected?.ok) {
+      record.bootstrapError = injected?.error || 'bootstrap_failed';
+      record.surfaceState = 'OPEN_BOOTSTRAP_FAILED';
+      record.chatUrl = win.webContents.getURL();
+      await markAgentSessionFailed(created.sessionId, record.bootstrapError);
+      emitBridgeEvent({
+        level: 'error',
+        message: `Sessão ${created.agentId} aberta, mas bootstrap falhou: ${record.bootstrapError}`,
+      });
+      return { ok: false, error: record.bootstrapError, session: publicAgentSession(record) };
+    }
+
+    record.bootstrapSent = true;
+    record.surfaceState = 'OPEN';
+    record.chatUrl = win.webContents.getURL();
+    record.updatedAt = new Date().toISOString();
+    await markAgentSessionOpen(created.sessionId, record.chatUrl);
+
+    emitBridgeEvent({
+      level: 'ok',
+      message: `Agent Session ativa: ${created.agentId} · ${created.sessionId.slice(0, 8)}`,
+    });
+    return { ok: true, session: publicAgentSession(record) };
+  } catch (error) {
+    record.bootstrapError = error.message;
+    record.surfaceState = 'OPEN_FAILED';
+    record.updatedAt = new Date().toISOString();
+    await markAgentSessionFailed(created.sessionId, error.message);
+    emitBridgeEvent({ level: 'error', message: `Agent Session ${created.agentId}: ${error.message}` });
+    return { ok: false, error: error.message, session: publicAgentSession(record) };
+  }
+}
 function updateViewBounds() {
   if (!mainWindow || mainWindow.isDestroyed() || !chatView || !workspaceView) return;
   const [width, height] = mainWindow.getContentSize();
@@ -349,7 +738,7 @@ function createWindow() {
     ...(savedBounds ?? { width: 1500, height: 920 }),
     minWidth: 900,
     minHeight: 620,
-    title: 'MCF Dual Browser Cockpit',
+    title: `MCF Dual Browser Cockpit · ${instance.id}`,
     backgroundColor: '#090d12',
     show: false,
     autoHideMenuBar: true,
@@ -369,10 +758,16 @@ function createWindow() {
   createViews();
 
   const captureDir = path.join(app.getPath('pictures'), 'MCF-Cockpit-Captures');
+  const uploadDir = path.join(app.getPath('userData'), 'approved-uploads');
+  mkdirSync(uploadDir, { recursive: true });
   bridge = new LocalAgentBridge({
-    getWorkspaceWebContents: () => workspaceView?.webContents ?? null,
+    getWorkspaceWebContents: activeWorkspaceWebContents,
     captureDir,
+    instanceId: instance.id,
+    uploadDir,
     captureWorkspace,
+    openAgentSession,
+    listAgentSessions,
     onEvent: emitBridgeEvent,
   });
 
@@ -403,29 +798,57 @@ function createWindow() {
     bridge = null;
     chatView = null;
     workspaceView = null;
+    workspaceAuxWindow = null;
+    for (const win of agentSessionWindows.values()) {
+      if (win && !win.isDestroyed()) win.close();
+    }
+    agentSessionWindows.clear();
     mainWindow = null;
   });
 }
 
+function activeWorkspaceWebContents() {
+  if (workspaceAuxWindow && !workspaceAuxWindow.isDestroyed()) {
+    const child = workspaceAuxWindow.webContents;
+    if (child && !child.isDestroyed()) return child;
+  }
+  return workspaceView?.webContents ?? null;
+}
+
 function getPane(pane) {
   if (pane === 'chat') return chatView?.webContents ?? null;
-  if (pane === 'workspace') return workspaceView?.webContents ?? null;
+  if (pane === 'workspace') return activeWorkspaceWebContents();
   return null;
 }
 
 async function captureWorkspace() {
-  const wc = workspaceView?.webContents;
+  const wc = activeWorkspaceWebContents();
   if (!wc || wc.isDestroyed()) return { ok: false, error: 'workspace_unavailable' };
   const dir = path.join(app.getPath('pictures'), 'MCF-Cockpit-Captures');
   mkdirSync(dir, { recursive: true });
-  const output = path.join(dir, `workspace-${Date.now()}.png`);
+  const output = path.join(dir, `workspace-${instance.id}-${process.pid}-${Date.now()}.png`);
   const image = await wc.capturePage();
-  writeFileSync(output, image.toPNG());
+  writeFileSync(output, image.toPNG(), { mode: 0o600, flag: 'wx' });
   emitBridgeEvent({ level: 'ok', message: `Captura salva: ${output}` });
   return { ok: true, path: output };
 }
 
-ipcMain.handle('layout:set-split', (_event, ratio) => {
+function handleTrusted(channel, handler) {
+  ipcMain.handle(channel, (event, ...args) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
+      throw new Error('untrusted_ipc_sender');
+    }
+    return handler(event, ...args);
+  });
+}
+
+handleTrusted('bridge:pause', () => {
+  const state = bridge.setPaused(!bridge.paused);
+  persistBridgeState(state);
+  return state;
+});
+
+handleTrusted('layout:set-split', (_event, ratio) => {
   const n = Number(ratio);
   if (!Number.isFinite(n)) return { ok: false };
   splitRatio = Math.min(0.72, Math.max(0.28, n));
@@ -434,7 +857,7 @@ ipcMain.handle('layout:set-split', (_event, ratio) => {
   return { ok: true, splitRatio };
 });
 
-ipcMain.handle('layout:preset', (_event, preset) => {
+handleTrusted('layout:preset', (_event, preset) => {
   const presets = { balanced: 0.5, leandro: 0.65, mestre: 0.35 };
   if (!(preset in presets)) return { ok: false };
   splitRatio = presets[preset];
@@ -443,7 +866,7 @@ ipcMain.handle('layout:preset', (_event, preset) => {
   return { ok: true, splitRatio };
 });
 
-ipcMain.handle('browser:navigate', async (_event, pane, input) => {
+handleTrusted('browser:navigate', async (_event, pane, input) => {
   const wc = getPane(pane);
   if (!wc) return { ok: false, error: 'pane_unavailable' };
   const url = normalizeNavigation(input);
@@ -452,7 +875,7 @@ ipcMain.handle('browser:navigate', async (_event, pane, input) => {
   return { ok: true, url };
 });
 
-ipcMain.handle('browser:action', (_event, pane, action) => {
+handleTrusted('browser:action', (_event, pane, action) => {
   const wc = getPane(pane);
   if (!wc) return { ok: false, error: 'pane_unavailable' };
   const history = wc.navigationHistory;
@@ -468,7 +891,7 @@ ipcMain.handle('browser:action', (_event, pane, action) => {
   return { ok: true };
 });
 
-ipcMain.handle('browser:open-external', async (_event, pane) => {
+handleTrusted('browser:open-external', async (_event, pane) => {
   const wc = getPane(pane);
   if (!wc) return { ok: false };
   const url = wc.getURL();
@@ -477,21 +900,21 @@ ipcMain.handle('browser:open-external', async (_event, pane) => {
   return { ok: true };
 });
 
-ipcMain.handle('browser:get-states', () => ({
+handleTrusted('browser:get-states', () => ({
   chat: chatView ? safeState('chat', chatView.webContents) : viewState.chat,
   workspace: workspaceView ? safeState('workspace', workspaceView.webContents) : viewState.workspace,
   splitRatio,
 }));
 
-ipcMain.handle('workspace:capture', async () => captureWorkspace());
+handleTrusted('workspace:capture', async () => captureWorkspace());
 
-ipcMain.handle('bridge:toggle', async () => {
+handleTrusted('bridge:toggle', async () => {
   const state = await bridge?.toggle() ?? { enabled: false, host: '127.0.0.1', port: null, token: null };
   persistBridgeState(state);
   return state;
 });
-ipcMain.handle('bridge:get-state', () => bridge?.getState() ?? { enabled: false, host: '127.0.0.1', port: null, token: null });
-ipcMain.handle('bridge:copy-token', () => {
+handleTrusted('bridge:get-state', () => bridge?.getState() ?? { enabled: false, host: '127.0.0.1', port: null, token: null });
+handleTrusted('bridge:copy-token', () => {
   const state = bridge?.getState();
   if (!state?.enabled || !state.token) return { ok: false };
   clipboard.writeText(state.token);
@@ -499,6 +922,7 @@ ipcMain.handle('bridge:copy-token', () => {
 });
 
 app.whenReady().then(() => {
+  if (!ownsInstance) return;
   app.setAccessibilitySupportEnabled(true);
   restoredRuntimeState = loadRuntimeState();
   const savedSplit = Number(restoredRuntimeState?.splitRatio);
@@ -506,7 +930,12 @@ app.whenReady().then(() => {
   createWindow();
 });
 
+app.on('second-instance', () => {
+  if (mainWindow) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); }
+});
+
 app.on('activate', () => {
+  if (!ownsInstance) return;
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 

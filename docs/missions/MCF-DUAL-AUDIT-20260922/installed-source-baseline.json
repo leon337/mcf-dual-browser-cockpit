@@ -1,0 +1,14 @@
+{
+  "src/main/main.mjs.20260922-agent-session.bak": "13b1cadaef3515a49ddb697cc6d4c07c202d94a2e6790b56ccaf315fcbe0bb5c",
+  "src/main/main.mjs.pre-persistence-20260921-192700.bak": "e1c96ca6116f7caf5d0b0c9f87d445e3897dd53529c6ab938f89730dd8fa58c4",
+  "src/main/main.mjs.pre-audio-20260921-193202.bak": "4ad19e7e53842ad03cf59c5c10133b5f6e295dd32981c83ac6d2237a32a40b67",
+  "src/main/bridge.mjs.20260922-agent-session.bak": "1df9fadb7302772877ff51e023c5e3bbde3531c6fbb7dc2302fa1afc15bad20f",
+  "src/main/bridge.mjs.bak-find-click-20260921": "cc4c52b2232f83e3daea47ecb8a3ec93e21e6c452732af47c011a6056a101661",
+  "src/main/bridge.mjs": "fad0160eb770e862df9396525197e891cb293c00d709610bdfe6e63dd1a9a9c7",
+  "src/main/main.mjs.pre-orca-20260921-190915.bak": "1be8cb1cad07defa5616b812ad0341a97a0bc68ca341b2c5dee5a27296e64da0",
+  "src/main/main.mjs": "9f519ed868365c37c0371279d9c9bbd07f02fde565ee6d60ad91ff5f0ef66fb7",
+  "src/renderer/renderer.js": "e0befcdcbd4c727f5e347d38875ef9197a1fa6de693288674977fd8b775acd89",
+  "src/renderer/index.html": "8525e46eb86c9cdd0d96a9d334ceee07cfc785ef5104b9778f87c076d8508d2c",
+  "src/renderer/styles.css": "391b5dc68213de61691fb8d1f577941d24ac17f92768a86c89de9bdbcc9ca0e4",
+  "src/preload/preload.cjs": "6edcb9c200975972b460f65b43a81cdc4b276bd7f5235764289f49442dc691ca"
+}

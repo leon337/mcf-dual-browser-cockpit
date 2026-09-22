@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('cockpit', {
     capture: () => ipcRenderer.invoke('workspace:capture'),
   },
   bridge: {
+    pause: () => ipcRenderer.invoke('bridge:pause'),
     toggle: () => ipcRenderer.invoke('bridge:toggle'),
     getState: () => ipcRenderer.invoke('bridge:get-state'),
     copyToken: () => ipcRenderer.invoke('bridge:copy-token'),
