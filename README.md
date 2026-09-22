@@ -23,7 +23,8 @@ O Cockpit é uma **Execution Surface**; ele não substitui o Mission Runtime ou 
 - restauração de URLs, janela e split;
 - Agent Bridge local em loopback com token efêmero;
 - navegação programática do Workspace;
-- captura do WebContents;
+- ação semântica `/v1/find-click`, inclusive em frames, sem exportar o DOM inteiro;
+- captura nativa única do Workspace compartilhada pelo botão visível e pelo Agent Bridge;
 - integração com ORCA/AT-SPI para observação semântica;
 - áudio via PipeWire/PulseAudio em Linux;
 - AppImage Linux e targets Windows via electron-builder.
@@ -37,6 +38,8 @@ O Agent Bridge:
 - escuta apenas em `127.0.0.1`;
 - usa token aleatório por execução;
 - não deve ser exposto diretamente à rede;
+- deve preferir ações semânticas/programáticas (`find-click`, `click`, `type`, `navigate`) a coordenadas físicas;
+- `/v1/pointer` permanece compatível, mas não é o caminho autorizado do MESTRE quando existe alternativa semântica;
 - deve permanecer sujeito à governança e aos gates do MCF.
 
 ## Desenvolvimento

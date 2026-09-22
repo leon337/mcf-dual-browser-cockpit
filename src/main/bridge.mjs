@@ -93,9 +93,10 @@ function pageSelectorScript() {
 }
 
 export class LocalAgentBridge {
-  constructor({ getWorkspaceWebContents, captureDir, onEvent = () => {} }) {
+  constructor({ getWorkspaceWebContents, captureDir, captureWorkspace = null, onEvent = () => {} }) {
     this.getWorkspaceWebContents = getWorkspaceWebContents;
     this.captureDir = captureDir;
+    this.captureWorkspace = captureWorkspace;
     this.onEvent = onEvent;
     this.server = null;
     this.port = null;
@@ -213,6 +214,64 @@ export class LocalAgentBridge {
         return json(res, 200, { ok: true });
       }
 
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/find-click') {
+        const body = await readJson(req);
+        if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 240) {
+          return json(res, 400, { ok: false, error: 'text_required' });
+        }
+        const normalizedText = body.text
+          .normalize('NFD')
+          .replace(/\p{Diacritic}/gu, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toLowerCase();
+        if (!normalizedText) {
+          return json(res, 400, { ok: false, error: 'text_required' });
+        }
+        const script = `(() => {
+          const needle = ${JSON.stringify(normalizedText)};
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const s = getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+          };
+          const norm = (value) => String(value || '').normalize('NFD').replace(/\\p{Diacritic}/gu, '').replace(/\\s+/g, ' ').trim().toLowerCase();
+          const enabled = (el) =>
+            !el.disabled &&
+            el.getAttribute('aria-disabled') !== 'true' &&
+            !el.hasAttribute('disabled');
+          const nodes = [...document.querySelectorAll('a,button,input[type="button"],input[type="submit"],input[type="reset"],input[type="image"],[role="button"],[role="link"],[role="option"],[role="menuitem"],summary')]
+            .filter((el) => visible(el) && enabled(el));
+          const el = nodes.find((node) => {
+            const labels = [
+              node.innerText,
+              node.value,
+              node.getAttribute('aria-label'),
+              node.getAttribute('title'),
+            ].map(norm).filter(Boolean);
+            return labels.some((label) => label.includes(needle));
+          });
+          if (!el) return {ok:false,error:'not_found'};
+          el.scrollIntoView({block:'center',inline:'center'});
+          el.focus?.();
+          el.click();
+          return {ok:true,clicked:true};
+        })()`;
+
+        const frames = wc.mainFrame?.framesInSubtree ?? [];
+        let framesChecked = 0;
+        for (const frame of frames) {
+          try {
+            framesChecked += 1;
+            const result = await frame.executeJavaScript(script, true);
+            if (result?.ok) {
+              return json(res, 200, { ok: true, clicked: true, framesChecked });
+            }
+          } catch {}
+        }
+        return json(res, 404, { ok: false, error: 'not_found', framesChecked });
+      }
+
       if (req.method === 'POST' && requestUrl.pathname === '/v1/click') {
         const body = await readJson(req);
         if (typeof body.selector !== 'string' || body.selector.length > 2000) {
@@ -271,6 +330,14 @@ export class LocalAgentBridge {
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/v1/capture') {
+        if (typeof this.captureWorkspace === 'function') {
+          const result = await this.captureWorkspace();
+          return json(
+            res,
+            result?.ok ? 200 : 500,
+            result ?? { ok: false, error: 'capture_failed' },
+          );
+        }
         mkdirSync(this.captureDir, { recursive: true });
         const image = await wc.capturePage();
         const filename = `workspace-${Date.now()}.png`;
