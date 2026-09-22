@@ -105,6 +105,7 @@ export class LocalAgentBridge {
     getChatGPTConversation = null,
     sendChatGPTMessage = null,
     closeChatGPTConversation = null,
+    openChatSurface = null,
     onEvent = () => {},
   }) {
     this.getWorkspaceWebContents = getWorkspaceWebContents;
@@ -120,6 +121,7 @@ export class LocalAgentBridge {
     this.getChatGPTConversation = getChatGPTConversation;
     this.sendChatGPTMessage = sendChatGPTMessage;
     this.closeChatGPTConversation = closeChatGPTConversation;
+    this.openChatSurface = openChatSurface;
     this.onEvent = onEvent;
     this.server = null;
     this.port = null;
@@ -292,6 +294,24 @@ export class LocalAgentBridge {
         }
         const closed = await this.closeChatGPTConversation(decodeURIComponent(closeMatch[1]));
         return json(res, closed ? 200 : 404, closed ? {ok:true} : {ok:false,error:'conversation_not_found'});
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/chat-surface/open') {
+        if (typeof this.openChatSurface !== 'function') {
+          return json(res, 503, { ok:false, error:'chat_surface_unavailable' });
+        }
+        const body = await readJson(req);
+        const rawUrl = typeof body.url === 'string' ? body.url.trim() : '';
+        let target;
+        try { target = new URL(rawUrl); } catch {
+          return json(res, 400, { ok:false, error:'valid_chatgpt_url_required' });
+        }
+        const validPath = target.pathname === '/' || target.pathname.startsWith('/c/') || target.pathname.startsWith('/uc/');
+        if (target.protocol !== 'https:' || target.hostname !== 'chatgpt.com' || !validPath || target.username || target.password) {
+          return json(res, 400, { ok:false, error:'valid_chatgpt_url_required' });
+        }
+        const result = await this.openChatSurface(target.href);
+        return json(res, result?.ok ? 200 : 422, result ?? { ok:false, error:'chat_surface_open_failed' });
       }
 
       const wc = this.getWorkspaceWebContents();

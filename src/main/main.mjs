@@ -864,6 +864,7 @@ function createWindow() {
     getChatGPTConversation: (id) => chatGPTConversationBroker.get(id),
     sendChatGPTMessage: (input) => chatGPTConversationBroker.send(input),
     closeChatGPTConversation: (id) => chatGPTConversationBroker.close(id),
+    openChatSurface: openPrimaryChatSurface,
     onEvent: emitBridgeEvent,
   });
 
@@ -907,6 +908,14 @@ function createWindow() {
     chatGPTConversationBroker = null;
     mainWindow = null;
   });
+}
+
+async function openPrimaryChatSurface(url) {
+  const wc = chatView?.webContents ?? null;
+  if (!wc || wc.isDestroyed()) return { ok:false, error:'chat_pane_unavailable' };
+  await wc.loadURL(url);
+  emitBridgeEvent({ level:'info', message:'ChatGPT principal abriu a conversa da ilha.' });
+  return { ok:true, url:wc.getURL() };
 }
 
 function activeWorkspaceWebContents() {

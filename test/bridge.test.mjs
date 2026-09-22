@@ -133,3 +133,28 @@ test('guest response labels are stripped before persistence', () => {
   assert.equal(normalizeAssistantCandidate('ChatGPT said: LINUX_CLEAN_READY'), 'LINUX_CLEAN_READY');
   assert.equal(normalizeAssistantCandidate('ChatGPT disse: PRONTO'), 'PRONTO');
 });
+
+
+test('chat surface route opens the primary ChatGPT pane for trusted ChatGPT URLs', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-chat-surface-'));
+  let openedUrl = null;
+  const wc = {
+    isDestroyed: () => false, getURL: () => 'http://127.0.0.1/', getTitle: () => 'workspace', isLoading: () => false,
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false }
+  };
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    captureDir: dir,
+    instanceId: 'surface-test',
+    openChatSurface: async (url) => { openedUrl = url; return { ok:true, url }; }
+  });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive:true, force:true }); });
+  const base = `http://127.0.0.1:${bridge.port}`;
+  const headers = { Authorization:`Bearer ${bridge.token}`, 'x-mcf-instance':'surface-test', 'Content-Type':'application/json' };
+  const response = await fetch(base + '/v1/chat-surface/open', { method:'POST', headers, body:JSON.stringify({url:'https://chatgpt.com/c/abc-123'}) });
+  assert.equal(response.status, 200);
+  assert.equal(openedUrl, 'https://chatgpt.com/c/abc-123');
+  const rejected = await fetch(base + '/v1/chat-surface/open', { method:'POST', headers, body:JSON.stringify({url:'https://example.com/c/abc-123'}) });
+  assert.equal(rejected.status, 400);
+});

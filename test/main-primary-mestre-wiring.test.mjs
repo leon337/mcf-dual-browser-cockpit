@@ -20,3 +20,9 @@ test('syntax check includes the primary MESTRE module', () => {
 test('startup performs a post-create chat sync to close the initial navigation race', () => {
   assert.match(main, /agentSessionRuntime\.set\(link\.sessionId, primaryMestreSession\);[\s\S]{0,300}await syncPrimaryMestreFromChat\(\)/);
 });
+
+
+test('bridge wires chat-surface navigation to the primary ChatGPT pane', () => {
+  assert.match(main, /async function openPrimaryChatSurface/);
+  assert.match(main, /openChatSurface:\s*openPrimaryChatSurface/);
+});
