@@ -82,13 +82,18 @@ async function clickSend(wc) {
       const s = getComputedStyle(el);
       return r.width > 10 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
     };
-    const direct = document.querySelector('[data-testid="send-button"]');
+    const direct = [
+      document.querySelector('[data-testid="send-button"]'),
+      document.querySelector('[data-testid="composer-submit-button"]'),
+      document.querySelector('button[type="submit"]')
+    ].find(el => visible(el) && !el.disabled);
     const buttons = [...document.querySelectorAll('button')].filter(visible);
-    const send = direct || buttons.find(button => {
+    const semantic = buttons.find(button => {
       const label = String(button.getAttribute('aria-label') || button.title || button.innerText || '').toLowerCase();
       return (label.includes('send') || label.includes('enviar')) && !button.disabled;
     });
-    if (send && !send.disabled) {
+    const send = direct || semantic;
+    if (send) {
       send.click();
       return {ok:true,method:'button'};
     }
@@ -100,6 +105,39 @@ async function clickSend(wc) {
     }
     return {ok:false,error:'chat_send_control_not_found'};
   })()`, true).catch(error => ({ok:false,error:error.message}));
+}
+
+async function pressEnterToSend(wc) {
+  try {
+    wc.sendInputEvent({ type:'keyDown', keyCode:'ENTER' });
+    wc.sendInputEvent({ type:'keyUp', keyCode:'ENTER' });
+    return {ok:true,method:'keyboard'};
+  } catch (error) {
+    return {ok:false,error:'chat_keyboard_send_failed',detail:error.message};
+  }
+}
+
+async function waitForSendAck(wc, before, userText, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  const expected = normalizedComparable(userText);
+  while (Date.now() < deadline) {
+    const snapshot = await conversationSnapshot(wc);
+    if (snapshot) last = snapshot;
+    if (snapshot) {
+      const routeCreated = /^\/(?:c|uc)\//.test(String(snapshot.path || ''));
+      const turnAdvanced = snapshot.turnCount > (before?.turnCount || 0);
+      const assistantAdvanced = snapshot.assistantCount > (before?.assistantCount || 0);
+      const generationStarted = Boolean(snapshot.stop);
+      const composer = normalizedComparable(snapshot.composerText);
+      const composerCleared = expected && !composer;
+      if (routeCreated || turnAdvanced || assistantAdvanced || generationStarted || composerCleared) {
+        return {ok:true,snapshot};
+      }
+    }
+    await sleep(250);
+  }
+  return {ok:false,snapshot:last};
 }
 
 async function conversationSnapshot(wc) {
@@ -129,6 +167,11 @@ async function conversationSnapshot(wc) {
       const testid = String(button.getAttribute('data-testid') || '').toLowerCase();
       return label.includes('stop') || label.includes('parar') || testid.includes('stop');
     });
+    const composer = document.querySelector('#prompt-textarea') || document.querySelector('textarea') || [...document.querySelectorAll('[contenteditable="true"]')].find(node => {
+      const r = node.getBoundingClientRect();
+      const s = getComputedStyle(node);
+      return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
+    });
     return {
       assistantCount: explicit.length,
       markdownCount: markdown.length,
@@ -137,6 +180,7 @@ async function conversationSnapshot(wc) {
       markdownText: markdownTexts.at(-1) || '',
       lastTurnText: turnTexts.at(-1) || '',
       previousTurnText: turnTexts.at(-2) || '',
+      composerText: String(composer?.innerText || composer?.value || '').trim(),
       stop,
       url: location.href,
       path: location.pathname,
@@ -323,9 +367,32 @@ export class ChatGPTConversationBroker {
     }
 
     await sleep(350);
-    const sent = await clickSend(wc);
-    if (!sent?.ok) return sent;
+    let sent = await clickSend(wc);
+    if (!sent?.ok) return { ...sent, delivery:'NOT_SENT' };
 
+    let ack = await waitForSendAck(wc, beforeSnapshot, value, 8000);
+    if (!ack.ok && normalizedComparable(ack.snapshot?.composerText) === normalizedComparable(value)) {
+      const keyboard = await pressEnterToSend(wc);
+      if (keyboard.ok) {
+        sent = keyboard;
+        ack = await waitForSendAck(wc, beforeSnapshot, value, 8000);
+      }
+    }
+    if (!ack.ok) {
+      record.state = 'READY';
+      record.lastError = 'chat_send_not_confirmed';
+      record.updatedAt = new Date().toISOString();
+      return {
+        ok:false,
+        error:'chat_send_not_confirmed',
+        delivery:'NOT_SENT',
+        diagnostics:ack.snapshot || null,
+        conversation:publicRecord(record)
+      };
+    }
+
+    record.chatgptUrl = ack.snapshot?.url || wc.getURL();
+    record.chatgptConversationId = parseConversationId(record.chatgptUrl);
     record.state = 'BUSY';
     record.updatedAt = new Date().toISOString();
     try {
