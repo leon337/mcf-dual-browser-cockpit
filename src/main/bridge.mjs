@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -80,7 +80,7 @@ function pageSelectorScript() {
           tag: el.tagName.toLowerCase(),
           type: el.getAttribute('type') || null,
           role: el.getAttribute('role') || null,
-          text: (el.innerText || el.value || '').trim().slice(0, 240),
+          text: (['INPUT','TEXTAREA','SELECT'].includes(el.tagName) || el.isContentEditable ? '' : (el.innerText || '')).trim().slice(0, 240),
           ariaLabel: el.getAttribute('aria-label'),
           placeholder: el.getAttribute('placeholder'),
           href: el.href || null,
@@ -93,10 +93,25 @@ function pageSelectorScript() {
 }
 
 export class LocalAgentBridge {
-  constructor({ getWorkspaceWebContents, captureDir, captureWorkspace = null, onEvent = () => {} }) {
+  constructor({
+    getWorkspaceWebContents,
+    captureDir,
+    instanceId = 'principal',
+    uploadDir = null,
+    captureWorkspace = null,
+    openAgentSession = null,
+    listAgentSessions = null,
+    onEvent = () => {},
+  }) {
     this.getWorkspaceWebContents = getWorkspaceWebContents;
     this.captureDir = captureDir;
+    this.instanceId = instanceId;
+    this.paused = false;
+    this.busy = false;
+    this.uploadDir = uploadDir;
     this.captureWorkspace = captureWorkspace;
+    this.openAgentSession = openAgentSession;
+    this.listAgentSessions = listAgentSessions;
     this.onEvent = onEvent;
     this.server = null;
     this.port = null;
@@ -106,16 +121,29 @@ export class LocalAgentBridge {
   getState() {
     return {
       enabled: Boolean(this.server),
+      instanceId: this.instanceId,
+      paused: this.paused,
+      busy: this.busy,
       host: '127.0.0.1',
       port: this.port,
       token: this.server ? this.token : null,
     };
   }
 
+  setPaused(paused) {
+    this.paused = Boolean(paused);
+    this.onEvent({ level: 'info', message: this.paused ? 'Novas ações pausadas; ação em curso pode terminar.' : 'Automação retomada.' });
+    return this.getState();
+  }
+
   async start(preferredPort = 47831) {
     if (this.server) return this.getState();
 
+    this.token = randomBytes(24).toString('base64url');
     const server = http.createServer((req, res) => this.#handle(req, res));
+    server.requestTimeout = 15000;
+    server.headersTimeout = 10000;
+    server.setTimeout(30000, socket => socket.destroy());
     await new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(preferredPort, '127.0.0.1', () => resolve());
@@ -140,7 +168,7 @@ export class LocalAgentBridge {
     const server = this.server;
     this.server = null;
     this.port = null;
-    await new Promise((resolve) => server.close(() => resolve()));
+    await new Promise((resolve) => { server.close(() => resolve()); server.closeAllConnections(); });
     this.onEvent({ level: 'info', message: 'Agent Bridge desativado.' });
     return this.getState();
   }
@@ -150,7 +178,11 @@ export class LocalAgentBridge {
   }
 
   async #handle(req, res) {
+    let acquired = false;
     try {
+      if (req.headers.host !== `127.0.0.1:${this.port}` && req.headers.host !== `localhost:${this.port}`) {
+        return json(res, 403, { ok: false, error: 'invalid_host' });
+      }
       if (req.headers.origin) {
         return json(res, 403, { ok: false, error: 'browser_origin_not_allowed' });
       }
@@ -165,6 +197,47 @@ export class LocalAgentBridge {
         return json(res, 401, { ok: false, error: 'unauthorized' });
       }
 
+      if (req.headers['x-mcf-instance'] && req.headers['x-mcf-instance'] !== this.instanceId) {
+        return json(res, 409, { ok: false, error: 'instance_mismatch' });
+      }
+      res.setHeader('x-mcf-instance', this.instanceId);
+      if (req.method === 'POST') {
+        if (this.paused) return json(res, 423, { ok: false, error: 'automation_paused' });
+        if (this.busy) return json(res, 409, { ok: false, error: 'automation_busy' });
+        this.busy = true;
+        acquired = true;
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/agent-sessions') {
+        if (typeof this.listAgentSessions !== 'function') {
+          return json(res, 503, { ok: false, error: 'agent_sessions_unavailable' });
+        }
+        const sessions = await this.listAgentSessions();
+        return json(res, 200, { ok: true, sessions });
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/agent-session/open') {
+        if (typeof this.openAgentSession !== 'function') {
+          return json(res, 503, { ok: false, error: 'agent_session_broker_unavailable' });
+        }
+        const body = await readJson(req);
+        const agent = typeof body.agent === 'string' ? body.agent.trim() : '';
+        const mission = typeof body.mission === 'string' ? body.mission.trim() : '';
+        const objective = typeof body.objective === 'string' ? body.objective.trim() : '';
+        if (!agent || agent.length > 80) {
+          return json(res, 400, { ok: false, error: 'valid_agent_required' });
+        }
+        if (mission.length > 160 || objective.length > 1600) {
+          return json(res, 400, { ok: false, error: 'agent_session_input_too_large' });
+        }
+        const result = await this.openAgentSession({
+          agent,
+          mission: mission || null,
+          objective: objective || null,
+        });
+        return json(res, result?.ok ? 201 : 422, result ?? { ok: false, error: 'agent_session_open_failed' });
+      }
+
       const wc = this.getWorkspaceWebContents();
       if (!wc || wc.isDestroyed()) {
         return json(res, 503, { ok: false, error: 'workspace_unavailable' });
@@ -174,6 +247,9 @@ export class LocalAgentBridge {
         return json(res, 200, {
           ok: true,
           state: {
+            instanceId: this.instanceId,
+            paused: this.paused,
+            busy: this.busy,
             url: wc.getURL(),
             title: wc.getTitle(),
             loading: wc.isLoading(),
@@ -198,8 +274,11 @@ export class LocalAgentBridge {
         if (typeof body.url !== 'string' || !/^https?:\/\//i.test(body.url)) {
           return json(res, 400, { ok: false, error: 'http_or_https_url_required' });
         }
-        await wc.loadURL(body.url);
-        this.onEvent({ level: 'info', message: `Bridge navegou para ${body.url}` });
+        let target;
+        try { target = new URL(body.url); } catch { return json(res, 400, { ok: false, error: 'invalid_url' }); }
+        if (target.username || target.password) return json(res, 400, { ok: false, error: 'url_credentials_not_allowed' });
+        await wc.loadURL(target.href);
+        this.onEvent({ level: 'info', message: 'Bridge concluiu navegação.' });
         return json(res, 200, { ok: true, url: wc.getURL() });
       }
 
@@ -329,27 +408,116 @@ export class LocalAgentBridge {
         return json(res, 200, { ok: true });
       }
 
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/upload-file') {
+        const body = await readJson(req);
+        const selector = typeof body.selector === 'string' && body.selector.trim()
+          ? body.selector.trim()
+          : 'input[type="file"]';
+        const buttonText = typeof body.buttonText === 'string' && body.buttonText.trim()
+          ? body.buttonText.trim()
+          : 'Upload files';
+        if (typeof body.file !== 'string' || !body.file.trim()) {
+          return json(res, 400, { ok: false, error: 'file_required' });
+        }
+        if (!this.uploadDir) {
+          return json(res, 503, { ok: false, error: 'upload_disabled' });
+        }
+        if (!existsSync(this.uploadDir) || !existsSync(body.file)) return json(res, 404, { ok: false, error: 'file_not_found' });
+        const root = realpathSync(this.uploadDir);
+        const file = realpathSync(body.file);
+        if (!(file === root || file.startsWith(root + path.sep))) {
+          return json(res, 403, { ok: false, error: 'file_not_allowlisted' });
+        }
+        if (!existsSync(file) || !statSync(file).isFile()) {
+          return json(res, 404, { ok: false, error: 'file_not_found' });
+        }
+
+        let attachedHere = false;
+        try {
+          if (!wc.debugger.isAttached()) {
+            wc.debugger.attach('1.3');
+            attachedHere = true;
+          }
+          const evaluated = await wc.debugger.sendCommand('Runtime.evaluate', {
+            expression: `document.querySelector(${JSON.stringify(selector)})`,
+            returnByValue: false,
+          });
+          const objectId = evaluated?.result?.subtype === 'null'
+            ? null
+            : evaluated?.result?.objectId;
+          if (objectId) {
+            await wc.debugger.sendCommand('DOM.setFileInputFiles', {
+              objectId,
+              files: [file],
+            });
+          } else {
+            await wc.debugger.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true });
+            const backendNodeId = await new Promise((resolve, reject) => {
+              let settled = false;
+              const finish = (fn, value) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                wc.debugger.removeListener('message', onMessage);
+                fn(value);
+              };
+              const onMessage = (_event, method, params) => {
+                if (method === 'Page.fileChooserOpened' && params?.backendNodeId) {
+                  finish(resolve, params.backendNodeId);
+                }
+              };
+              const timer = setTimeout(() => finish(reject, new Error('file_chooser_timeout')), 6000);
+              wc.debugger.on('message', onMessage);
+              const clickScript = `(() => {
+                const norm = (v) => String(v || '').normalize('NFD').replace(/\\p{Diacritic}/gu, '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                const needle = norm(${JSON.stringify(buttonText)});
+                const el = [...document.querySelectorAll('button,[role="button"]')]
+                  .find((node) => norm(node.innerText || node.getAttribute('aria-label') || '').includes(needle));
+                if (!el) return false;
+                el.click();
+                return true;
+              })()`;
+              wc.executeJavaScript(clickScript, true)
+                .then((clicked) => { if (!clicked) finish(reject, new Error('upload_button_not_found')); })
+                .catch((error) => finish(reject, error));
+            });
+            await wc.debugger.sendCommand('DOM.setFileInputFiles', {
+              backendNodeId,
+              files: [file],
+            });
+          }
+          this.onEvent({ level: 'ok', message: `Bridge anexou arquivo aprovado: ${path.basename(file)}` });
+          return json(res, 200, { ok: true, filename: path.basename(file) });
+        } finally {
+          if (wc.debugger.isAttached()) {
+            try { await wc.debugger.sendCommand('Page.setInterceptFileChooserDialog', { enabled: false }); } catch {}
+          }
+          if (attachedHere && wc.debugger.isAttached()) {
+            try { wc.debugger.detach(); } catch {}
+          }
+        }
+      }
+
       if (req.method === 'POST' && requestUrl.pathname === '/v1/capture') {
         if (typeof this.captureWorkspace === 'function') {
           const result = await this.captureWorkspace();
-          return json(
-            res,
-            result?.ok ? 200 : 500,
-            result ?? { ok: false, error: 'capture_failed' },
-          );
+          return json(res, result?.ok ? 200 : 500, result ?? { ok: false, error: 'capture_failed' });
         }
         mkdirSync(this.captureDir, { recursive: true });
         const image = await wc.capturePage();
         const filename = `workspace-${Date.now()}.png`;
         const output = path.join(this.captureDir, filename);
-        writeFileSync(output, image.toPNG());
+        writeFileSync(output, image.toPNG(), { mode: 0o600, flag: 'wx' });
         return json(res, 200, { ok: true, path: output });
       }
 
       return json(res, 404, { ok: false, error: 'not_found' });
     } catch (error) {
-      this.onEvent({ level: 'error', message: `Bridge: ${error.message}` });
-      return json(res, 500, { ok: false, error: 'internal_error', detail: error.message });
+      const code = error.message === 'invalid_json' ? 'invalid_json' : 'internal_error';
+      this.onEvent({ level: 'error', message: `Bridge: ${code}` });
+      if (!res.destroyed) return json(res, code === 'invalid_json' ? 400 : 500, { ok: false, error: code });
+    } finally {
+      if (acquired) this.busy = false;
     }
   }
 }

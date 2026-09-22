@@ -77,3 +77,7 @@ Workspace / artefatos / navegação programática
 ## Licença
 
 MIT.
+
+## Versão 0.3.0
+
+Consulte [instâncias e pausa](docs/INSTANCIAS.md), [auditoria](docs/missions/MCF-DUAL-AUDIT-20260922/AUDIT.md) e [validação](docs/missions/MCF-DUAL-AUDIT-20260922/VALIDATION.md). A Bridge inicia ligada, autenticada e limitada a loopback.
