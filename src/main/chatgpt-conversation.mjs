@@ -254,6 +254,35 @@ function normalizedComparable(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function transientResponseText(value) {
+  const text = normalizedComparable(value).toLowerCase();
+  if (!text) return true;
+  return [
+    'pensando',
+    'thinking',
+    'thinking…',
+    'thinking...',
+    'generating',
+    'generating…',
+    'generating...',
+    'working',
+    'working…',
+    'working...',
+    'analisando',
+    'processando',
+    'gerando'
+  ].includes(text);
+}
+
+function withoutUserEcho(value, userText) {
+  const text = normalizedComparable(value);
+  const user = normalizedComparable(userText);
+  if (!text || !user) return text;
+  if (text === user) return '';
+  if (text.startsWith(user)) return normalizedComparable(text.slice(user.length));
+  return text;
+}
+
 function bodyTailCandidate(snapshot, userText) {
   const body = String(snapshot?.bodyText || '');
   const user = String(userText || '').trim();
@@ -289,10 +318,10 @@ function responseCandidate(snapshot, before, userText) {
     snapshot.assistantText !== beforeAssistant ? snapshot.assistantText : '',
     snapshot.markdownText !== beforeMarkdown ? snapshot.markdownText : '',
     bodyTailCandidate(snapshot, userText)
-  ].map(normalizedComparable).filter(Boolean);
+  ].map(value => withoutUserEcho(value, userText)).filter(Boolean);
 
   return candidates.find(text => {
-    if (!text) return false;
+    if (!text || transientResponseText(text)) return false;
     if (text === user) return false;
     if (user && text.endsWith(user) && text.length <= user.length + 80) return false;
     return true;
@@ -318,7 +347,7 @@ async function observeAssistant(wc, before, userText, timeoutMs = 120000) {
         stableText = text;
         stableSince = Date.now();
       }
-      if (snapshot.completionAction || (!snapshot.stop && Date.now() - stableSince >= 1200)) {
+      if (!snapshot.stop && (snapshot.completionAction || Date.now() - stableSince >= 1200)) {
         return { ...snapshot, text };
       }
     }
