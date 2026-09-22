@@ -253,10 +253,11 @@ export class LocalAgentBridge {
         const body = await readJson(req);
         const id = typeof body.id === 'string' ? body.id.trim() : '';
         const title = typeof body.title === 'string' ? body.title.trim() : '';
-        if (!id || id.length > 160 || title.length > 160) {
+        const url = typeof body.url === 'string' ? body.url.trim() : '';
+        if (!id || id.length > 160 || title.length > 160 || url.length > 2048) {
           return json(res, 400, { ok:false, error:'valid_conversation_input_required' });
         }
-        const result = await this.openChatGPTConversation({ id, title: title || 'Archipelago Chat' });
+        const result = await this.openChatGPTConversation({ id, title: title || 'Archipelago Chat', url: url || null });
         return json(res, result?.ok ? 201 : 422, result ?? {ok:false,error:'conversation_open_failed'});
       }
 
