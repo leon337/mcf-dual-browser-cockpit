@@ -7,7 +7,7 @@ function sleep(ms) {
 function parseConversationId(url) {
   try {
     const parsed = new URL(url);
-    const match = parsed.pathname.match(/^\/c\/([^/?#]+)/);
+    const match = parsed.pathname.match(/^\/(?:c|uc)\/([^/?#]+)/);
     return match ? match[1] : null;
   } catch {
     return null;
@@ -104,25 +104,39 @@ async function clickSend(wc) {
 
 async function conversationSnapshot(wc) {
   return wc.executeJavaScript(`(() => {
-    const explicit = [
+    const uniq = (items) => [...new Set(items.filter(Boolean))];
+    const explicit = uniq([
       ...document.querySelectorAll('[data-message-author-role="assistant"]'),
       ...document.querySelectorAll('[data-turn="assistant"]'),
       ...document.querySelectorAll('[data-author="assistant"]')
-    ];
-    const assistantNodes = [...new Set(explicit)];
-    const assistantTexts = assistantNodes.map(node => String(node.innerText || '').trim()).filter(Boolean);
-    const turns = [...document.querySelectorAll('[data-testid^="conversation-turn-"], article')];
-    const turnTexts = turns.map(node => String(node.innerText || '').trim()).filter(Boolean);
+    ]);
+    const markdown = uniq([
+      ...document.querySelectorAll('[data-message-author-role="assistant"] .markdown'),
+      ...document.querySelectorAll('[data-message-author-role="assistant"] [class*="markdown"]'),
+      ...document.querySelectorAll('article .markdown'),
+      ...document.querySelectorAll('[data-testid^="conversation-turn-"] .markdown')
+    ]);
+    const turns = uniq([
+      ...document.querySelectorAll('[data-testid^="conversation-turn-"]'),
+      ...document.querySelectorAll('article')
+    ]);
+    const textOf = (node) => String(node?.innerText || '').trim();
+    const explicitTexts = explicit.map(textOf).filter(Boolean);
+    const markdownTexts = markdown.map(textOf).filter(Boolean);
+    const turnTexts = turns.map(textOf).filter(Boolean);
     const stop = [...document.querySelectorAll('button')].some(button => {
       const label = String(button.getAttribute('aria-label') || button.title || button.innerText || '').toLowerCase();
       const testid = String(button.getAttribute('data-testid') || '').toLowerCase();
       return label.includes('stop') || label.includes('parar') || testid.includes('stop');
     });
     return {
-      assistantCount: assistantNodes.length,
+      assistantCount: explicit.length,
+      markdownCount: markdown.length,
       turnCount: turns.length,
-      assistantText: assistantTexts.at(-1) || '',
+      assistantText: explicitTexts.at(-1) || '',
+      markdownText: markdownTexts.at(-1) || '',
       lastTurnText: turnTexts.at(-1) || '',
+      previousTurnText: turnTexts.at(-2) || '',
       stop,
       url: location.href,
       path: location.pathname,
@@ -131,20 +145,44 @@ async function conversationSnapshot(wc) {
   })()`, true).catch(() => null);
 }
 
-async function observeAssistant(wc, before, timeoutMs = 120000) {
+function normalizedComparable(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function responseCandidate(snapshot, before, userText) {
+  if (!snapshot) return '';
+  const user = normalizedComparable(userText);
+  const beforeAssistant = normalizedComparable(before?.assistantText);
+  const beforeMarkdown = normalizedComparable(before?.markdownText);
+  const candidates = [
+    snapshot.assistantCount > (before?.assistantCount || 0) ? snapshot.assistantText : '',
+    snapshot.markdownCount > (before?.markdownCount || 0) ? snapshot.markdownText : '',
+    snapshot.turnCount > (before?.turnCount || 0) ? snapshot.lastTurnText : '',
+    snapshot.assistantText !== beforeAssistant ? snapshot.assistantText : '',
+    snapshot.markdownText !== beforeMarkdown ? snapshot.markdownText : ''
+  ].map(normalizedComparable).filter(Boolean);
+
+  return candidates.find(text => {
+    if (!text) return false;
+    if (text === user) return false;
+    if (user && text.endsWith(user) && text.length <= user.length + 80) return false;
+    return true;
+  }) || '';
+}
+
+async function observeAssistant(wc, before, userText, timeoutMs = 120000) {
   const deadline = Date.now() + timeoutMs;
   let stableText = '';
   let stableSince = 0;
   let lastSnapshot = null;
+
   while (Date.now() < deadline) {
     if (wc.isDestroyed()) throw new Error('chat_surface_destroyed');
     const snapshot = await conversationSnapshot(wc);
     if (snapshot) lastSnapshot = snapshot;
-    const explicitReady = snapshot && snapshot.assistantCount > before.assistantCount;
-    const turnReady = snapshot && snapshot.turnCount >= before.turnCount + 2;
-    const text = snapshot ? (snapshot.assistantText || (turnReady ? snapshot.lastTurnText : '')) : '';
+    const text = responseCandidate(snapshot, before, userText);
 
-    if ((explicitReady || turnReady) && text) {
+    if (text) {
       if (text === stableText) {
         if (!stableSince) stableSince = Date.now();
       } else {
@@ -157,6 +195,7 @@ async function observeAssistant(wc, before, timeoutMs = 120000) {
     }
     await sleep(350);
   }
+
   const error = new Error('chatgpt_response_timeout');
   error.diagnostics = lastSnapshot;
   throw error;
@@ -290,7 +329,7 @@ export class ChatGPTConversationBroker {
     record.state = 'BUSY';
     record.updatedAt = new Date().toISOString();
     try {
-      const snapshot = await observeAssistant(wc, beforeSnapshot);
+      const snapshot = await observeAssistant(wc, beforeSnapshot, value);
       record.chatgptUrl = snapshot.url || wc.getURL();
       record.chatgptConversationId = parseConversationId(record.chatgptUrl);
       record.state = 'READY';
