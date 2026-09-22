@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { LocalAgentBridge } from '../src/main/bridge.mjs';
 import { instanceConfig, atomicJson } from '../src/main/instance.mjs';
-import { normalizeAssistantCandidate } from '../src/main/chatgpt-conversation.mjs';
+import { normalizeAssistantCandidate } from '../src/main/chatgpt-text.mjs';
 
 test('profiles reject traversal and isolate atomic state', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-test-'));
