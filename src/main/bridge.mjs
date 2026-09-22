@@ -151,7 +151,7 @@ export class LocalAgentBridge {
     const server = http.createServer((req, res) => this.#handle(req, res));
     server.requestTimeout = 15000;
     server.headersTimeout = 10000;
-    server.setTimeout(30000, socket => socket.destroy());
+    server.setTimeout(180000, socket => socket.destroy());
     await new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(preferredPort, '127.0.0.1', () => resolve());
