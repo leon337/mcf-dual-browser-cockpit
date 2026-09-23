@@ -26,3 +26,17 @@ test('bridge wires chat-surface navigation to the primary ChatGPT pane', () => {
   assert.match(main, /async function openPrimaryChatSurface/);
   assert.match(main, /openChatSurface:\s*openPrimaryChatSurface/);
 });
+
+test('main cockpit wires persistent MESTRE inbox delivery worker', () => {
+  assert.match(main, /PrimaryMestreInbox/);
+  assert.match(main, /deliverPrimaryMestreInboxItem/);
+  assert.match(main, /enqueueMestreInboxMessage:/);
+  assert.match(main, /listMestreInbox:/);
+  assert.match(main, /primaryMestreInboxTimer/);
+});
+
+test('syntax check includes MESTRE inbox and ChatGPT idle modules', () => {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.match(pkg.scripts.check, /primary-mestre-inbox\.mjs/);
+  assert.match(pkg.scripts.check, /chatgpt-idle\.mjs/);
+});

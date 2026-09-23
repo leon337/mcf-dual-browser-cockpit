@@ -109,3 +109,44 @@ test('does not reuse a MESTRE session restored from another cockpit instance', a
   assert.equal(result.sessionId, 'local-session');
   assert.equal(result.instanceId, 'archipelago-linux-clean2');
 });
+
+test('does not rebind canonical MESTRE when the visible pane navigates to an island chat', async () => {
+  const feature = await loadFeature();
+  let marked = 0;
+  const current = {
+    ...mestreRecord({surfaceState:'OPEN'}),
+    instanceId:'archipelago-linux-clean2',
+    chatUrl:'https://chatgpt.com/c/mestre-canonical',
+    conversationId:'mestre-canonical',
+    primary:true,
+  };
+  const result = await feature.syncPrimaryMestreSession({
+    current,
+    chatUrl:'https://chatgpt.com/c/island-chat',
+    markOpen: async () => { marked++; return mestreRecord(); },
+  });
+  assert.equal(marked, 0);
+  assert.equal(result.chatUrl, 'https://chatgpt.com/c/mestre-canonical');
+  assert.equal(result.conversationId, 'mestre-canonical');
+});
+
+test('startup prefers restored canonical MESTRE chat over currently visible island chat', async () => {
+  const feature = await loadFeature();
+  let markedUrl = null;
+  const restored = {
+    sessionId:'mestre-session-1',
+    instanceId:'archipelago-linux-clean2',
+    chatUrl:'https://chatgpt.com/c/mestre-canonical',
+    conversationId:'mestre-canonical'
+  };
+  const result = await feature.ensurePrimaryMestreSession({
+    instanceId:'archipelago-linux-clean2',
+    restored,
+    chatUrl:'https://chatgpt.com/c/island-visible',
+    loadSession: async () => mestreRecord({chatUrl:'https://chatgpt.com/c/mestre-canonical'}),
+    createSession: async () => mestreRecord({sessionId:'new-session'}),
+    markOpen: async (_sessionId, chatUrl) => { markedUrl = chatUrl; return mestreRecord({chatUrl,surfaceState:'OPEN'}); },
+  });
+  assert.equal(markedUrl, 'https://chatgpt.com/c/mestre-canonical');
+  assert.equal(result.conversationId, 'mestre-canonical');
+});

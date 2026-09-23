@@ -1,5 +1,6 @@
 import { BrowserWindow } from 'electron';
 import { normalizedComparable, normalizeAssistantCandidate } from './chatgpt-text.mjs';
+import { isChatSnapshotIdle } from './chatgpt-idle.mjs';
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -607,6 +608,23 @@ export class ChatGPTConversationBroker {
       record.updatedAt = new Date().toISOString();
       return {ok:false,error:error.message,diagnostics:error.diagnostics || null,conversation:publicRecord(record)};
     }
+  }
+
+  async isIdle(id) {
+    const record = this.records.get(String(id || ''));
+    if (!record || !record.window || record.window.isDestroyed()) {
+      return {ok:false,idle:false,error:'conversation_surface_not_found'};
+    }
+    if (record.state !== 'READY') {
+      return {ok:true,idle:false,reason:'conversation_not_ready',conversation:publicRecord(record)};
+    }
+    const snapshot = await conversationSnapshot(record.window.webContents);
+    return {
+      ok:true,
+      idle:isChatSnapshotIdle(snapshot),
+      diagnostics:snapshotDiagnostics(snapshot),
+      conversation:publicRecord(record)
+    };
   }
 
   close(id) {

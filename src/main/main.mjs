@@ -8,6 +8,7 @@ import { LocalAgentBridge } from './bridge.mjs';
 import { instanceConfig, atomicJson } from './instance.mjs';
 import { ChatGPTConversationBroker } from './chatgpt-conversation.mjs';
 import { ensurePrimaryMestreSession, syncPrimaryMestreSession } from './primary-mestre-session.mjs';
+import { PrimaryMestreInbox } from './primary-mestre-inbox.mjs';
 
 const instance = instanceConfig(process.argv, app.getPath('userData'));
 mkdirSync(instance.userData, { recursive: true, mode: 0o700 });
@@ -42,6 +43,9 @@ let restoredRuntimeState = null;
 let runtimePersistTimer = null;
 let primaryMestreSession = null;
 let primaryMestreSyncPromise = Promise.resolve();
+let primaryMestreInbox = null;
+let primaryMestreInboxTimer = null;
+const MESTRE_INBOX_BROKER_ID = 'mestre-primary-inbox';
 const RUNTIME_STATE_VERSION = 1;
 
 const viewState = {
@@ -622,6 +626,52 @@ function syncPrimaryMestreFromChat() {
   return primaryMestreSyncPromise;
 }
 
+async function preparePrimaryMestreInboxDelivery() {
+  if (!chatGPTConversationBroker) return {ready:false,reason:'chatgpt_broker_unavailable'};
+  const targetUrl = primaryMestreSession?.chatUrl || null;
+  const targetConversationId = primaryMestreSession?.conversationId || null;
+  if (!targetUrl || !targetConversationId || !/\/(?:c|uc)\//.test(targetUrl)) {
+    return {ready:false,reason:'mestre_conversation_not_bound'};
+  }
+
+  let surface = chatGPTConversationBroker.get(MESTRE_INBOX_BROKER_ID);
+  if (surface && surface.chatgptConversationId !== targetConversationId) {
+    chatGPTConversationBroker.close(MESTRE_INBOX_BROKER_ID);
+    surface = null;
+  }
+  if (!surface || surface.state !== 'READY') {
+    const opened = await chatGPTConversationBroker.open({
+      id:MESTRE_INBOX_BROKER_ID,
+      title:'MESTRE Inbox',
+      url:targetUrl,
+    });
+    if (!opened?.ok) return {ready:false,reason:opened?.error || 'mestre_surface_not_ready'};
+  }
+
+  const idle = await chatGPTConversationBroker.isIdle(MESTRE_INBOX_BROKER_ID);
+  if (!idle?.ok || !idle.idle) return {ready:false,reason:'mestre_busy'};
+  return {ready:true};
+}
+
+async function deliverPrimaryMestreInboxItem(item) {
+  const readiness = await preparePrimaryMestreInboxDelivery();
+  if (!readiness.ready) return {deferred:true,reason:readiness.reason};
+  const relayText = `[MCF RELAY · ${item.from}]\nIlha: ${item.fromChatId}\n\n${item.text}`;
+  const sent = await chatGPTConversationBroker.send({id:MESTRE_INBOX_BROKER_ID,text:relayText});
+  if (sent?.ok) return {ok:true,response:sent.response ?? null};
+  return sent ?? {ok:false,error:'mestre_delivery_failed'};
+}
+
+function startPrimaryMestreInboxWorker() {
+  if (primaryMestreInboxTimer) clearInterval(primaryMestreInboxTimer);
+  primaryMestreInboxTimer = setInterval(() => {
+    void primaryMestreInbox?.processOne().catch((error) => {
+      emitBridgeEvent({level:'error',message:'MESTRE inbox worker: ' + error.message});
+    });
+  }, 2000);
+  primaryMestreInboxTimer.unref?.();
+}
+
 function secureAgentWindow(win) {
   const wc = win.webContents;
   wc.setAudioMuted(false);
@@ -851,6 +901,13 @@ function createWindow() {
     chatUrl: CHATGPT_URL,
     onEvent: emitBridgeEvent,
   });
+  primaryMestreInbox = new PrimaryMestreInbox({
+    file:path.join(app.getPath('userData'), 'mestre-inbox.json'),
+    deliver:deliverPrimaryMestreInboxItem,
+    canDeliver:preparePrimaryMestreInboxDelivery,
+    onEvent:emitBridgeEvent,
+  });
+  startPrimaryMestreInboxWorker();
 
   bridge = new LocalAgentBridge({
     getWorkspaceWebContents: activeWorkspaceWebContents,
@@ -865,6 +922,8 @@ function createWindow() {
     sendChatGPTMessage: (input) => chatGPTConversationBroker.send(input),
     closeChatGPTConversation: (id) => chatGPTConversationBroker.close(id),
     openChatSurface: openPrimaryChatSurface,
+    enqueueMestreInboxMessage: (input) => primaryMestreInbox.enqueue(input),
+    listMestreInbox: () => primaryMestreInbox.list(),
     onEvent: emitBridgeEvent,
   });
 
@@ -894,6 +953,7 @@ function createWindow() {
   });
 
   mainWindow.on('closed', async () => {
+    if (primaryMestreInboxTimer) { clearInterval(primaryMestreInboxTimer); primaryMestreInboxTimer = null; }
     const state = await bridge?.stop().catch(() => null);
     persistBridgeState(state);
     bridge = null;
@@ -906,6 +966,7 @@ function createWindow() {
     agentSessionWindows.clear();
     chatGPTConversationBroker?.closeAll();
     chatGPTConversationBroker = null;
+    primaryMestreInbox = null;
     mainWindow = null;
   });
 }
@@ -1051,6 +1112,7 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', async () => {
+  if (primaryMestreInboxTimer) { clearInterval(primaryMestreInboxTimer); primaryMestreInboxTimer = null; }
   if (runtimePersistTimer) { clearTimeout(runtimePersistTimer); runtimePersistTimer = null; }
   try { persistRuntimeState(); } catch {}
   chatGPTConversationBroker?.closeAll();

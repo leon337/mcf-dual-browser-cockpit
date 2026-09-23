@@ -58,7 +58,9 @@ export async function ensurePrimaryMestreSession({
     if (!record?.sessionId || !isMestre(record)) throw new Error('invalid_primary_mestre_session');
   }
 
-  const effectiveUrl = chatUrl || record.chatUrl || null;
+  const restoredCanonicalUrl = restored?.conversationId && restored?.chatUrl ? restored.chatUrl : null;
+  const recordCanonicalUrl = extractChatGPTConversationId(record?.chatUrl) ? record.chatUrl : null;
+  const effectiveUrl = restoredCanonicalUrl || recordCanonicalUrl || chatUrl || record.chatUrl || null;
   if (effectiveUrl && typeof markOpen === 'function') {
     const opened = await markOpen(record.sessionId, effectiveUrl);
     if (opened?.sessionId === record.sessionId && isMestre(opened)) record = { ...record, ...opened };
@@ -68,7 +70,10 @@ export async function ensurePrimaryMestreSession({
 
 export async function syncPrimaryMestreSession({ current, chatUrl, markOpen }) {
   if (!current?.sessionId || !isMestre(current)) throw new Error('primary_mestre_session_required');
-  const effectiveUrl = chatUrl || current.chatUrl || null;
+  const candidateUrl = chatUrl || current.chatUrl || null;
+  const candidateConversationId = extractChatGPTConversationId(candidateUrl);
+  if (current.conversationId && candidateConversationId !== current.conversationId) return current;
+  const effectiveUrl = candidateUrl;
   if (effectiveUrl === current.chatUrl) return current;
 
   let record = current;

@@ -180,3 +180,36 @@ test('click route falls back to MouseEvent for SVG targets without click()', asy
   assert.match(script, /typeof el\.click === 'function'/);
   assert.match(script, /dispatchEvent\(new MouseEvent\('click'/);
 });
+
+test('MESTRE inbox routes enqueue and list relay messages', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-mestre-inbox-'));
+  const items = [];
+  const wc = {
+    isDestroyed: () => false, getURL: () => 'http://127.0.0.1/', getTitle: () => 'workspace', isLoading: () => false,
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false }
+  };
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    captureDir: dir,
+    instanceId: 'inbox-test',
+    enqueueMestreInboxMessage: input => {
+      const item = { id:'queue-1', state:'PENDING', ...input };
+      items.push(item);
+      return { ok:true, deduplicated:false, item };
+    },
+    listMestreInbox: () => items
+  });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive:true, force:true }); });
+  const base = `http://127.0.0.1:${bridge.port}`;
+  const headers = { Authorization:`Bearer ${bridge.token}`, 'x-mcf-instance':'inbox-test', 'Content-Type':'application/json' };
+  const queued = await fetch(base + '/v1/mestre/inbox', {
+    method:'POST', headers,
+    body:JSON.stringify({messageId:'m1',from:'ILHA_1',fromChatId:'chat-1',text:'olá mestre'})
+  });
+  assert.equal(queued.status, 202);
+  assert.equal((await queued.json()).item.text, 'olá mestre');
+  const listed = await fetch(base + '/v1/mestre/inbox', {headers});
+  assert.equal(listed.status, 200);
+  assert.equal((await listed.json()).items.length, 1);
+});

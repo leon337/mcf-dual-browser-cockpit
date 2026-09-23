@@ -106,6 +106,8 @@ export class LocalAgentBridge {
     sendChatGPTMessage = null,
     closeChatGPTConversation = null,
     openChatSurface = null,
+    enqueueMestreInboxMessage = null,
+    listMestreInbox = null,
     onEvent = () => {},
   }) {
     this.getWorkspaceWebContents = getWorkspaceWebContents;
@@ -122,6 +124,8 @@ export class LocalAgentBridge {
     this.sendChatGPTMessage = sendChatGPTMessage;
     this.closeChatGPTConversation = closeChatGPTConversation;
     this.openChatSurface = openChatSurface;
+    this.enqueueMestreInboxMessage = enqueueMestreInboxMessage;
+    this.listMestreInbox = listMestreInbox;
     this.onEvent = onEvent;
     this.server = null;
     this.port = null;
@@ -216,6 +220,29 @@ export class LocalAgentBridge {
         if (this.busy) return json(res, 409, { ok: false, error: 'automation_busy' });
         this.busy = true;
         acquired = true;
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/mestre/inbox') {
+        if (typeof this.listMestreInbox !== 'function') {
+          return json(res, 503, { ok:false, error:'mestre_inbox_unavailable' });
+        }
+        return json(res, 200, { ok:true, items:this.listMestreInbox() });
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/mestre/inbox') {
+        if (typeof this.enqueueMestreInboxMessage !== 'function') {
+          return json(res, 503, { ok:false, error:'mestre_inbox_unavailable' });
+        }
+        const body = await readJson(req);
+        const messageId = typeof body.messageId === 'string' ? body.messageId.trim() : '';
+        const from = typeof body.from === 'string' ? body.from.trim() : '';
+        const fromChatId = typeof body.fromChatId === 'string' ? body.fromChatId.trim() : '';
+        const text = typeof body.text === 'string' ? body.text.trim() : '';
+        if (!messageId || messageId.length > 180 || !from || from.length > 120 || !fromChatId || fromChatId.length > 180 || !text || text.length > 12000) {
+          return json(res, 400, { ok:false, error:'valid_mestre_inbox_message_required' });
+        }
+        const result = this.enqueueMestreInboxMessage({ messageId, from, fromChatId, text });
+        return json(res, 202, result);
       }
 
       if (req.method === 'GET' && requestUrl.pathname === '/v1/agent-sessions') {
