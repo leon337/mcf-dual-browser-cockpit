@@ -101,6 +101,13 @@ export class LocalAgentBridge {
     captureWorkspace = null,
     openAgentSession = null,
     listAgentSessions = null,
+    openChatGPTConversation = null,
+    getChatGPTConversation = null,
+    sendChatGPTMessage = null,
+    closeChatGPTConversation = null,
+    openChatSurface = null,
+    enqueueMestreInboxMessage = null,
+    listMestreInbox = null,
     onEvent = () => {},
   }) {
     this.getWorkspaceWebContents = getWorkspaceWebContents;
@@ -112,6 +119,13 @@ export class LocalAgentBridge {
     this.captureWorkspace = captureWorkspace;
     this.openAgentSession = openAgentSession;
     this.listAgentSessions = listAgentSessions;
+    this.openChatGPTConversation = openChatGPTConversation;
+    this.getChatGPTConversation = getChatGPTConversation;
+    this.sendChatGPTMessage = sendChatGPTMessage;
+    this.closeChatGPTConversation = closeChatGPTConversation;
+    this.openChatSurface = openChatSurface;
+    this.enqueueMestreInboxMessage = enqueueMestreInboxMessage;
+    this.listMestreInbox = listMestreInbox;
     this.onEvent = onEvent;
     this.server = null;
     this.port = null;
@@ -143,7 +157,7 @@ export class LocalAgentBridge {
     const server = http.createServer((req, res) => this.#handle(req, res));
     server.requestTimeout = 15000;
     server.headersTimeout = 10000;
-    server.setTimeout(30000, socket => socket.destroy());
+    server.setTimeout(180000, socket => socket.destroy());
     await new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(preferredPort, '127.0.0.1', () => resolve());
@@ -208,6 +222,29 @@ export class LocalAgentBridge {
         acquired = true;
       }
 
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/mestre/inbox') {
+        if (typeof this.listMestreInbox !== 'function') {
+          return json(res, 503, { ok:false, error:'mestre_inbox_unavailable' });
+        }
+        return json(res, 200, { ok:true, items:this.listMestreInbox() });
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/mestre/inbox') {
+        if (typeof this.enqueueMestreInboxMessage !== 'function') {
+          return json(res, 503, { ok:false, error:'mestre_inbox_unavailable' });
+        }
+        const body = await readJson(req);
+        const messageId = typeof body.messageId === 'string' ? body.messageId.trim() : '';
+        const from = typeof body.from === 'string' ? body.from.trim() : '';
+        const fromChatId = typeof body.fromChatId === 'string' ? body.fromChatId.trim() : '';
+        const text = typeof body.text === 'string' ? body.text.trim() : '';
+        if (!messageId || messageId.length > 180 || !from || from.length > 120 || !fromChatId || fromChatId.length > 180 || !text || text.length > 12000) {
+          return json(res, 400, { ok:false, error:'valid_mestre_inbox_message_required' });
+        }
+        const result = this.enqueueMestreInboxMessage({ messageId, from, fromChatId, text });
+        return json(res, 202, result);
+      }
+
       if (req.method === 'GET' && requestUrl.pathname === '/v1/agent-sessions') {
         if (typeof this.listAgentSessions !== 'function') {
           return json(res, 503, { ok: false, error: 'agent_sessions_unavailable' });
@@ -236,6 +273,72 @@ export class LocalAgentBridge {
           objective: objective || null,
         });
         return json(res, result?.ok ? 201 : 422, result ?? { ok: false, error: 'agent_session_open_failed' });
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/chatgpt/conversation/open') {
+        if (typeof this.openChatGPTConversation !== 'function') {
+          return json(res, 503, { ok:false, error:'chatgpt_conversation_broker_unavailable' });
+        }
+        const body = await readJson(req);
+        const id = typeof body.id === 'string' ? body.id.trim() : '';
+        const title = typeof body.title === 'string' ? body.title.trim() : '';
+        const url = typeof body.url === 'string' ? body.url.trim() : '';
+        if (!id || id.length > 160 || title.length > 160 || url.length > 2048) {
+          return json(res, 400, { ok:false, error:'valid_conversation_input_required' });
+        }
+        const result = await this.openChatGPTConversation({ id, title: title || 'Archipelago Chat', url: url || null });
+        return json(res, result?.ok ? 201 : 422, result ?? {ok:false,error:'conversation_open_failed'});
+      }
+
+      const chatStateMatch = requestUrl.pathname.match(/^\/v1\/chatgpt\/conversation\/([^/]+)$/);
+      if (req.method === 'GET' && chatStateMatch) {
+        if (typeof this.getChatGPTConversation !== 'function') {
+          return json(res, 503, { ok:false, error:'chatgpt_conversation_broker_unavailable' });
+        }
+        const id = decodeURIComponent(chatStateMatch[1]);
+        const conversation = await this.getChatGPTConversation(id);
+        return json(res, conversation ? 200 : 404, conversation ? {ok:true,conversation} : {ok:false,error:'conversation_not_found'});
+      }
+
+      const sendMatch = requestUrl.pathname.match(/^\/v1\/chatgpt\/conversation\/([^/]+)\/send$/);
+      if (req.method === 'POST' && sendMatch) {
+        if (typeof this.sendChatGPTMessage !== 'function') {
+          return json(res, 503, { ok:false, error:'chatgpt_conversation_broker_unavailable' });
+        }
+        const body = await readJson(req);
+        const text = typeof body.text === 'string' ? body.text.trim() : '';
+        if (!text || text.length > 12000) {
+          return json(res, 400, {ok:false,error:'valid_message_required'});
+        }
+        const result = await this.sendChatGPTMessage({ id:decodeURIComponent(sendMatch[1]), text });
+        return json(res, result?.ok ? 200 : 422, result ?? {ok:false,error:'chatgpt_send_failed'});
+      }
+
+      const closeMatch = requestUrl.pathname.match(/^\/v1\/chatgpt\/conversation\/([^/]+)\/close$/);
+      if (req.method === 'POST' && closeMatch) {
+        if (typeof this.closeChatGPTConversation !== 'function') {
+          return json(res, 503, { ok:false, error:'chatgpt_conversation_broker_unavailable' });
+        }
+        const closed = await this.closeChatGPTConversation(decodeURIComponent(closeMatch[1]));
+        return json(res, closed ? 200 : 404, closed ? {ok:true} : {ok:false,error:'conversation_not_found'});
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/chat-surface/open') {
+        if (typeof this.openChatSurface !== 'function') {
+          return json(res, 503, { ok:false, error:'chat_surface_unavailable' });
+        }
+        const body = await readJson(req);
+        const rawUrl = typeof body.url === 'string' ? body.url.trim() : '';
+        let target;
+        try { target = new URL(rawUrl); } catch {
+          return json(res, 400, { ok:false, error:'valid_chatgpt_url_required' });
+        }
+        const validPath = target.pathname === '/' || target.pathname.startsWith('/c/') || target.pathname.startsWith('/uc/');
+        if (target.protocol !== 'https:' || target.hostname !== 'chatgpt.com' || !validPath || target.username || target.password) {
+          return json(res, 400, { ok:false, error:'valid_chatgpt_url_required' });
+        }
+        const result = await this.openChatSurface(target.href);
+        return json(res, result?.ok ? 200 : 422, result ?? { ok:false, error:'chat_surface_open_failed' });
       }
 
       const wc = this.getWorkspaceWebContents();
@@ -361,7 +464,8 @@ export class LocalAgentBridge {
           if (!el) return {ok:false,error:'not_found'};
           el.scrollIntoView({block:'center',inline:'center'});
           el.focus?.();
-          el.click();
+          if (typeof el.click === 'function') el.click();
+          else el.dispatchEvent(new MouseEvent('click', { bubbles:true, cancelable:true, view:window }));
           return {ok:true};
         })()`, true);
         return json(res, result.ok ? 200 : 404, result);

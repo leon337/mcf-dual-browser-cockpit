@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { LocalAgentBridge } from '../src/main/bridge.mjs';
 import { instanceConfig, atomicJson } from '../src/main/instance.mjs';
+import { normalizeAssistantCandidate } from '../src/main/chatgpt-text.mjs';
 
 test('profiles reject traversal and isolate atomic state', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-test-'));
@@ -69,4 +70,146 @@ test('HTTP bridge security and concurrency', async t => {
   assert.equal(page.nodes[0].text, '');
   assert.ok(!JSON.stringify(page).includes('DO_NOT_LEAK'));
   const oldToken = bridge.token; await bridge.stop(); await bridge.start(0); assert.notEqual(oldToken, bridge.token);
+});
+
+
+test('ChatGPT conversation bridge routes', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-chatgpt-bridge-'));
+  const wc = {
+    isDestroyed: () => false,
+    getURL: () => 'https://example.test/',
+    getTitle: () => 'fixture',
+    isLoading: () => false,
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    executeJavaScript: async () => ({})
+  };
+  const conversations = new Map();
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    captureDir: dir,
+    instanceId: 'chatgpt-test',
+    openChatGPTConversation: async ({id,title}) => {
+      const conversation = {id,title,state:'READY',chatgptUrl:'https://chatgpt.com/',chatgptConversationId:null};
+      conversations.set(id, conversation);
+      return {ok:true,conversation};
+    },
+    getChatGPTConversation: async id => conversations.get(id) || null,
+    sendChatGPTMessage: async ({id,text}) => {
+      const conversation = conversations.get(id);
+      if (!conversation) return {ok:false,error:'conversation_not_found'};
+      conversation.chatgptUrl = 'https://chatgpt.com/c/abc123';
+      conversation.chatgptConversationId = 'abc123';
+      return {ok:true,conversation,response:{role:'assistant',text:'echo:'+text}};
+    },
+    closeChatGPTConversation: async id => conversations.delete(id)
+  });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir,{recursive:true}); });
+  const base = `http://127.0.0.1:${bridge.port}`;
+  const headers = {Authorization:`Bearer ${bridge.token}`,'x-mcf-instance':'chatgpt-test','Content-Type':'application/json'};
+
+  const opened = await fetch(base+'/v1/chatgpt/conversation/open',{method:'POST',headers,body:JSON.stringify({id:'island-1',title:'Ilha 1'})});
+  assert.equal(opened.status,201);
+  assert.equal((await opened.json()).conversation.state,'READY');
+
+  const state = await fetch(base+'/v1/chatgpt/conversation/island-1',{headers});
+  assert.equal(state.status,200);
+  assert.equal((await state.json()).conversation.id,'island-1');
+
+  const sent = await fetch(base+'/v1/chatgpt/conversation/island-1/send',{method:'POST',headers,body:JSON.stringify({text:'oi'})});
+  assert.equal(sent.status,200);
+  const sentBody = await sent.json();
+  assert.equal(sentBody.conversation.chatgptConversationId,'abc123');
+  assert.equal(sentBody.response.text,'echo:oi');
+
+  const closed = await fetch(base+'/v1/chatgpt/conversation/island-1/close',{method:'POST',headers,body:'{}'});
+  assert.equal(closed.status,200);
+  assert.equal(conversations.has('island-1'),false);
+});
+
+
+test('guest response labels are stripped before persistence', () => {
+  assert.equal(normalizeAssistantCandidate('ChatGPT said:'), '');
+  assert.equal(normalizeAssistantCandidate('ChatGPT said: LINUX_CLEAN_READY'), 'LINUX_CLEAN_READY');
+  assert.equal(normalizeAssistantCandidate('ChatGPT disse: PRONTO'), 'PRONTO');
+});
+
+
+test('chat surface route opens the primary ChatGPT pane for trusted ChatGPT URLs', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-chat-surface-'));
+  let openedUrl = null;
+  const wc = {
+    isDestroyed: () => false, getURL: () => 'http://127.0.0.1/', getTitle: () => 'workspace', isLoading: () => false,
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false }
+  };
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    captureDir: dir,
+    instanceId: 'surface-test',
+    openChatSurface: async (url) => { openedUrl = url; return { ok:true, url }; }
+  });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive:true, force:true }); });
+  const base = `http://127.0.0.1:${bridge.port}`;
+  const headers = { Authorization:`Bearer ${bridge.token}`, 'x-mcf-instance':'surface-test', 'Content-Type':'application/json' };
+  const response = await fetch(base + '/v1/chat-surface/open', { method:'POST', headers, body:JSON.stringify({url:'https://chatgpt.com/c/abc-123'}) });
+  assert.equal(response.status, 200);
+  assert.equal(openedUrl, 'https://chatgpt.com/c/abc-123');
+  const rejected = await fetch(base + '/v1/chat-surface/open', { method:'POST', headers, body:JSON.stringify({url:'https://example.com/c/abc-123'}) });
+  assert.equal(rejected.status, 400);
+});
+
+
+test('click route falls back to MouseEvent for SVG targets without click()', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-svg-click-'));
+  let script = '';
+  const wc = {
+    isDestroyed: () => false, getURL: () => 'http://127.0.0.1/', getTitle: () => 'workspace', isLoading: () => false,
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    executeJavaScript: async value => { script = value; return {ok:true}; }
+  };
+  const bridge = new LocalAgentBridge({ getWorkspaceWebContents: () => wc, captureDir: dir, instanceId: 'svg-click-test' });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive:true, force:true }); });
+  const response = await fetch(`http://127.0.0.1:${bridge.port}/v1/click`, {
+    method:'POST',
+    headers:{Authorization:`Bearer ${bridge.token}`,'x-mcf-instance':'svg-click-test','Content-Type':'application/json'},
+    body:JSON.stringify({selector:'g.island.chat'})
+  });
+  assert.equal(response.status, 200);
+  assert.match(script, /typeof el\.click === 'function'/);
+  assert.match(script, /dispatchEvent\(new MouseEvent\('click'/);
+});
+
+test('MESTRE inbox routes enqueue and list relay messages', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-mestre-inbox-'));
+  const items = [];
+  const wc = {
+    isDestroyed: () => false, getURL: () => 'http://127.0.0.1/', getTitle: () => 'workspace', isLoading: () => false,
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false }
+  };
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    captureDir: dir,
+    instanceId: 'inbox-test',
+    enqueueMestreInboxMessage: input => {
+      const item = { id:'queue-1', state:'PENDING', ...input };
+      items.push(item);
+      return { ok:true, deduplicated:false, item };
+    },
+    listMestreInbox: () => items
+  });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive:true, force:true }); });
+  const base = `http://127.0.0.1:${bridge.port}`;
+  const headers = { Authorization:`Bearer ${bridge.token}`, 'x-mcf-instance':'inbox-test', 'Content-Type':'application/json' };
+  const queued = await fetch(base + '/v1/mestre/inbox', {
+    method:'POST', headers,
+    body:JSON.stringify({messageId:'m1',from:'ILHA_1',fromChatId:'chat-1',text:'olá mestre'})
+  });
+  assert.equal(queued.status, 202);
+  assert.equal((await queued.json()).item.text, 'olá mestre');
+  const listed = await fetch(base + '/v1/mestre/inbox', {headers});
+  assert.equal(listed.status, 200);
+  assert.equal((await listed.json()).items.length, 1);
 });
