@@ -437,7 +437,8 @@ export class LocalAgentBridge {
           if (!el) return {ok:false,error:'not_found'};
           el.scrollIntoView({block:'center',inline:'center'});
           el.focus?.();
-          el.click();
+          if (typeof el.click === 'function') el.click();
+          else el.dispatchEvent(new MouseEvent('click', { bubbles:true, cancelable:true, view:window }));
           return {ok:true};
         })()`, true);
         return json(res, result.ok ? 200 : 404, result);

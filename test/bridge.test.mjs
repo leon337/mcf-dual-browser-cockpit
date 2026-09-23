@@ -158,3 +158,25 @@ test('chat surface route opens the primary ChatGPT pane for trusted ChatGPT URLs
   const rejected = await fetch(base + '/v1/chat-surface/open', { method:'POST', headers, body:JSON.stringify({url:'https://example.com/c/abc-123'}) });
   assert.equal(rejected.status, 400);
 });
+
+
+test('click route falls back to MouseEvent for SVG targets without click()', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-svg-click-'));
+  let script = '';
+  const wc = {
+    isDestroyed: () => false, getURL: () => 'http://127.0.0.1/', getTitle: () => 'workspace', isLoading: () => false,
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    executeJavaScript: async value => { script = value; return {ok:true}; }
+  };
+  const bridge = new LocalAgentBridge({ getWorkspaceWebContents: () => wc, captureDir: dir, instanceId: 'svg-click-test' });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive:true, force:true }); });
+  const response = await fetch(`http://127.0.0.1:${bridge.port}/v1/click`, {
+    method:'POST',
+    headers:{Authorization:`Bearer ${bridge.token}`,'x-mcf-instance':'svg-click-test','Content-Type':'application/json'},
+    body:JSON.stringify({selector:'g.island.chat'})
+  });
+  assert.equal(response.status, 200);
+  assert.match(script, /typeof el\.click === 'function'/);
+  assert.match(script, /dispatchEvent\(new MouseEvent\('click'/);
+});
