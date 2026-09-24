@@ -171,8 +171,9 @@ test('runtime dispatches mission envelope only to the identity-bound pane and re
 });
 
 
-test('runtime retries transient fresh-conversation aborts before failing identity bootstrap', async () => {
+test('runtime reconciles a transient fresh-conversation abort before any retry', async () => {
   let freshAttempts = 0;
+  let reconciliationChecks = 0;
   const broker = {
     listAgents: async () => canonical,
     showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
@@ -183,7 +184,16 @@ test('runtime retries transient fresh-conversation aborts before failing identit
     getUrl: pane => 'https://chatgpt.test/' + pane,
     freshConversation: async () => {
       freshAttempts += 1;
-      if (freshAttempts === 1) throw new Error("ERR_ABORTED (-3) loading restored URL");
+      throw new Error("ERR_ABORTED (-3) loading restored URL");
+    },
+    reconcileFreshConversation: async pane => {
+      reconciliationChecks += 1;
+      return {
+        ok: true,
+        fresh: true,
+        composerAvailable: true,
+        url: 'https://chatgpt.test/' + pane,
+      };
     },
     sendMessage: async (pane) => ({ ok: true, pane, method: 'button', url: 'https://chatgpt.test/' + pane + '/c/new' }),
     waitForAssistantMarker: async () => true,
@@ -199,7 +209,8 @@ test('runtime retries transient fresh-conversation aborts before failing identit
 
   const result = await runtime.bootstrap({ agentId: 'Emily' });
   assert.equal(result.ok, true);
-  assert.equal(freshAttempts, 2);
+  assert.equal(freshAttempts, 1);
+  assert.equal(reconciliationChecks, 1);
   assert.equal(runtime.getIdentities().find(x => x.agentId === 'Emily').state, 'READY');
 });
 
@@ -2644,9 +2655,20 @@ test('identity bootstrap recovers message_send_unconfirmed when the exact ready 
   };
   const surface = {
     getUrl: () => 'https://chatgpt.test/c/rafael',
-    freshConversation: async () => {},
+    freshConversation: async () => ({ ok: true, url: 'https://chatgpt.test/g/project' }),
     sendMessage: async () => ({ ok: false, error: 'message_send_unconfirmed' }),
     waitForAssistantMarker: async (_pane, marker) => marker.includes('agent_id=Rafael'),
+    inspectIdentityBootstrap: async (_pane, input) => ({
+      ok: true,
+      verified: true,
+      userAnchorFound: true,
+      markerObserved: true,
+      conflictingAttempt: false,
+      userMessageId: 'user-rafael',
+      assistantMessageId: 'assistant-rafael',
+      url: 'https://chatgpt.test/g/project/c/rafael',
+      marker: input.marker,
+    }),
   };
 
   const runtime = new PaneAgentRuntime({
@@ -2664,9 +2686,202 @@ test('identity bootstrap recovers message_send_unconfirmed when the exact ready 
   assert.equal(persisted.bindings.workspace.state, 'READY');
   assert.equal(persisted.bindings.workspace.handshakeVerified, true);
   const kinds = runtime.listReceipts().map(receipt => receipt.kind);
-  assert.ok(kinds.includes('IDENTITY_BOOTSTRAP_DELIVERY_RECOVERED'));
+  assert.ok(kinds.includes('IDENTITY_BOOTSTRAP_DELIVERY_UNCERTAIN'));
   assert.ok(kinds.includes('HANDSHAKE_VERIFIED'));
   assert.equal(kinds.includes('IDENTITY_BOOTSTRAP_DELIVERY_FAILED'), false);
+});
+
+test('identity bootstrap reconciles late delivery without creating or sending a duplicate', async () => {
+  const bindings = agentBindingsForProfile('debug-engineering');
+  let persisted = null;
+  let freshCalls = 0;
+  let sendCalls = 0;
+  let evidenceReady = false;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async () => sessionFor('Rafael'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: () => evidenceReady
+      ? 'https://chatgpt.test/g/project/c/rafael'
+      : 'https://chatgpt.test/g/project',
+    freshConversation: async () => {
+      freshCalls += 1;
+      return { ok: true, url: 'https://chatgpt.test/g/project' };
+    },
+    sendMessage: async () => {
+      sendCalls += 1;
+      return { ok: false, error: 'message_send_unconfirmed' };
+    },
+    waitForAssistantMarker: async () => evidenceReady,
+    inspectIdentityBootstrap: async () => ({
+      ok: true,
+      verified: evidenceReady,
+      userAnchorFound: evidenceReady,
+      markerObserved: evidenceReady,
+      conflictingAttempt: false,
+      userMessageId: evidenceReady ? 'user-rafael' : null,
+      assistantMessageId: evidenceReady ? 'assistant-rafael' : null,
+      url: evidenceReady
+        ? 'https://chatgpt.test/g/project/c/rafael'
+        : 'https://chatgpt.test/g/project',
+      error: evidenceReady ? null : 'identity_bootstrap_user_anchor_not_found',
+    }),
+  };
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook-team2',
+    missionId: 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003',
+    broker,
+    surface,
+    agentBindings: bindings,
+    loadState: () => null,
+    saveState: state => { persisted = structuredClone(state); },
+  });
+
+  const first = await runtime.bootstrap({ agentId: 'Rafael' });
+  assert.equal(first.ok, false);
+  assert.equal(first.agents[0].error, 'identity_bootstrap_reconciliation_required');
+  assert.equal(persisted.bindings.workspace.state, 'RECONCILING');
+  assert.equal(persisted.bindings.workspace.reconciliationRequired, true);
+  assert.equal(freshCalls, 1);
+  assert.equal(sendCalls, 1);
+
+  evidenceReady = true;
+  const second = await runtime.bootstrap({ agentId: 'Rafael' });
+  assert.equal(second.ok, true);
+  assert.equal(second.agents[0].reconciled, true);
+  assert.equal(persisted.bindings.workspace.state, 'READY');
+  assert.equal(persisted.bindings.workspace.handshakeVerified, true);
+  assert.equal(persisted.bindings.workspace.reconciliationRequired, false);
+  assert.equal(freshCalls, 1);
+  assert.equal(sendCalls, 1);
+});
+
+test('identity bootstrap restart reconciles the original uncertain attempt before any resend', async () => {
+  const bindings = agentBindingsForProfile('debug-engineering');
+  let persisted = null;
+  let freshCalls = 0;
+  let sendCalls = 0;
+  let evidenceReady = false;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async () => sessionFor('Rafael'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: () => evidenceReady
+      ? 'https://chatgpt.test/g/project/c/restart'
+      : 'https://chatgpt.test/g/project',
+    freshConversation: async () => {
+      freshCalls += 1;
+      return { ok: true, url: 'https://chatgpt.test/g/project' };
+    },
+    sendMessage: async () => {
+      sendCalls += 1;
+      return { ok: false, error: 'message_send_unconfirmed' };
+    },
+    waitForAssistantMarker: async () => evidenceReady,
+    inspectIdentityBootstrap: async () => ({
+      ok: true,
+      verified: evidenceReady,
+      userAnchorFound: evidenceReady,
+      markerObserved: evidenceReady,
+      conflictingAttempt: false,
+      userMessageId: evidenceReady ? 'user-restart' : null,
+      assistantMessageId: evidenceReady ? 'assistant-restart' : null,
+      url: evidenceReady
+        ? 'https://chatgpt.test/g/project/c/restart'
+        : 'https://chatgpt.test/g/project',
+      error: evidenceReady ? null : 'identity_bootstrap_user_anchor_not_found',
+    }),
+  };
+
+  const firstRuntime = new PaneAgentRuntime({
+    instanceId: 'notebook-team2',
+    missionId: 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003',
+    broker,
+    surface,
+    agentBindings: bindings,
+    loadState: () => null,
+    saveState: state => { persisted = structuredClone(state); },
+  });
+  const first = await firstRuntime.bootstrap({ agentId: 'Rafael' });
+  assert.equal(first.ok, false);
+  assert.equal(sendCalls, 1);
+
+  evidenceReady = true;
+  const restarted = new PaneAgentRuntime({
+    instanceId: 'notebook-team2',
+    missionId: 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003',
+    broker,
+    surface,
+    agentBindings: bindings,
+    loadState: () => structuredClone(persisted),
+    saveState: state => { persisted = structuredClone(state); },
+  });
+  const recovered = await restarted.bootstrap({ agentId: 'Rafael', force: true });
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.agents[0].reconciled, true);
+  assert.equal(sendCalls, 1);
+  assert.equal(freshCalls, 1);
+  assert.equal(persisted.bindings.workspace.state, 'READY');
+  assert.equal(persisted.bindings.workspace.handshakeVerified, true);
+});
+
+test('identity bootstrap stays fail-closed when uncertain delivery cannot be correlated', async () => {
+  const bindings = agentBindingsForProfile('debug-engineering');
+  let persisted = null;
+  let freshCalls = 0;
+  let sendCalls = 0;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async () => sessionFor('Rafael'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: () => 'https://chatgpt.test/g/project',
+    freshConversation: async () => {
+      freshCalls += 1;
+      return { ok: true, url: 'https://chatgpt.test/g/project' };
+    },
+    sendMessage: async () => {
+      sendCalls += 1;
+      return { ok: false, error: 'message_send_unconfirmed' };
+    },
+    waitForAssistantMarker: async () => false,
+    inspectIdentityBootstrap: async () => ({
+      ok: true,
+      verified: false,
+      userAnchorFound: false,
+      markerObserved: false,
+      conflictingAttempt: false,
+      url: 'https://chatgpt.test/g/project',
+      error: 'identity_bootstrap_user_anchor_not_found',
+    }),
+  };
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook-team2',
+    missionId: 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003',
+    broker,
+    surface,
+    agentBindings: bindings,
+    loadState: () => null,
+    saveState: state => { persisted = structuredClone(state); },
+  });
+
+  const first = await runtime.bootstrap({ agentId: 'Rafael' });
+  const second = await runtime.bootstrap({ agentId: 'Rafael', force: true });
+  assert.equal(first.ok, false);
+  assert.equal(second.ok, false);
+  assert.equal(second.agents[0].error, 'identity_bootstrap_reconciliation_required');
+  assert.equal(sendCalls, 1);
+  assert.equal(freshCalls, 1);
+  assert.equal(persisted.bindings.workspace.state, 'RECONCILING');
+  assert.equal(persisted.bindings.workspace.handshakeVerified, false);
 });
 
 test('runtime fails closed on lost conversation anchor and releases same-pane queue', async () => {
