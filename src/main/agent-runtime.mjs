@@ -634,14 +634,42 @@ export class PaneAgentRuntime {
 
         let acceptance = null;
         if (typeof this.surface.waitForAssistantStart === 'function') {
-          acceptance = await this.surface.waitForAssistantStart(pane, {
-            marker,
-            envelope,
-            executionId,
-            session,
-            userMessageId,
-            baselineAssistantMessageId,
-          });
+          while (true) {
+            acceptance = await this.surface.waitForAssistantStart(pane, {
+              marker,
+              envelope,
+              executionId,
+              session,
+              userMessageId,
+              baselineAssistantMessageId,
+            });
+
+            const stillWaitingForAssistantIdentity = !acceptance?.accepted
+              && !acceptance?.interrupted
+              && acceptance?.error === 'assistant_start_timeout'
+              && acceptance?.generationActive === true;
+
+            if (!stillWaitingForAssistantIdentity) break;
+
+            this.#record(createAgentReceipt({
+              kind: 'MISSION_ACCEPTANCE_STILL_WAITING',
+              status: 'DELIVERED',
+              binding,
+              session,
+              envelope,
+              evidence: {
+                pane,
+                executionId,
+                marker,
+                userMessageId,
+                baselineAssistantMessageId,
+                observation: 'assistant_start_timeout_generation_active_non_terminal',
+                generationActive: true,
+                url: acceptance?.url ?? this.surface.getUrl(pane) ?? null,
+              },
+              now: this.now(),
+            }));
+          }
         } else if (typeof this.surface.waitForAssistantMarker === 'function') {
           const markerObserved = await this.surface.waitForAssistantMarker(pane, marker);
           acceptance = markerObserved

@@ -555,11 +555,31 @@ async function waitForAssistantStart(
     await sleep(250);
   }
 
+  const generationActive = await wc.executeJavaScript(`(() => {
+    return [...document.querySelectorAll('button')].some(button => {
+      const rect = button.getBoundingClientRect();
+      if (!(rect.width > 0 && rect.height > 0)) return false;
+      const label = String(
+        button.getAttribute('aria-label')
+        || button.getAttribute('data-testid')
+        || button.title
+        || button.innerText
+        || ''
+      ).toLowerCase();
+      return label.includes('stop generating')
+        || label.includes('parar de gerar')
+        || label === 'stop-button';
+    });
+  })()`, true).catch(() => false);
+
   return {
     ok: false,
     accepted: false,
     error: 'assistant_start_timeout',
+    generationActive: Boolean(generationActive),
+    linkedUserMessageId: userMessageId ?? null,
     baselineAssistantMessageId,
+    url: wc.getURL(),
   };
 }
 

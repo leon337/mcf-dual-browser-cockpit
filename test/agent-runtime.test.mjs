@@ -1629,3 +1629,92 @@ test('runtime blocks mission dispatch until startup recovery is explicitly compl
   await runtime.waitForPendingMissions();
   assert.equal(runtime.getMission(accepted.envelope.envelopeId).state, 'COMPLETED');
 });
+
+
+test('runtime keeps delayed assistant start non-terminal while generation remains active', async () => {
+  let state = null;
+  let startObservations = 0;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/delayed-start',
+    freshConversation: async () => {},
+    waitForAssistantMarker: async () => true,
+    sendMessage: async pane => ({
+      ok: true,
+      pane,
+      deliveryConfirmed: true,
+      composerCleared: true,
+      conversationAdvanced: true,
+      userMessageId: 'user-delayed-start',
+      baselineAssistantMessageId: 'assistant-before-delayed-start',
+      url: 'https://chatgpt.test/' + pane + '/c/delayed-start',
+    }),
+    waitForAssistantStart: async () => {
+      startObservations += 1;
+      if (startObservations === 1) {
+        return {
+          ok: false,
+          accepted: false,
+          generationActive: true,
+          error: 'assistant_start_timeout',
+          userMessageId: 'user-delayed-start',
+        };
+      }
+      return {
+        ok: true,
+        accepted: true,
+        assistantMessageId: 'assistant-delayed-start',
+        linkedUserMessageId: 'user-delayed-start',
+        markerObserved: false,
+        generationActive: true,
+      };
+    },
+    waitForAssistantResult: async () => ({
+      ok: true,
+      generationFinished: true,
+      generationActive: false,
+      terminalSignal: 'ui_generation_inactive_with_final_actions',
+      finalActionsObserved: true,
+      stableForMs: 1500,
+      assistantMessageId: 'assistant-delayed-start',
+      conversationId: 'delayed-start',
+      text: 'Resultado final após início atrasado.',
+    }),
+  };
+
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-AGENT-LIFECYCLE-002',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+  });
+  await runtime.bootstrap();
+
+  const dispatched = await runtime.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'MISSION-DELAYED-START-1',
+    parentMissionId: 'PARENT-DELAYED-START-1',
+    objective: 'Aguardar início real do assistant.',
+  });
+  await runtime.waitForPendingMissions();
+
+  const mission = runtime.getMission(dispatched.envelope.envelopeId);
+  assert.equal(startObservations, 2);
+  assert.equal(mission.state, 'COMPLETED');
+  assert.equal(runtime.getParentMissionStatus('PARENT-DELAYED-START-1').closable, true);
+
+  const kinds = runtime.listReceipts()
+    .filter(r => r.envelope?.envelopeId === dispatched.envelope.envelopeId)
+    .map(r => r.kind);
+  assert.ok(kinds.includes('MISSION_ACCEPTANCE_STILL_WAITING'));
+  assert.ok(kinds.includes('MISSION_ACCEPTED'));
+  assert.ok(kinds.includes('MISSION_COMPLETED'));
+  assert.equal(kinds.includes('MISSION_ACCEPTANCE_UNVERIFIED'), false);
+});
