@@ -44,6 +44,19 @@ O Agent Bridge:
 - `/v1/pointer` permanece compatível, mas não é o caminho autorizado do MESTRE quando existe alternativa semântica;
 - deve permanecer sujeito à governança e aos gates do MCF.
 
+## Perfis de agentes
+
+Os bindings de agentes são selecionados por `--agent-profile` e continuam limitados
+aos dois panes `chat` e `workspace`. Perfis atualmente definidos:
+
+- `audit-architecture`: chat=Emily, workspace=Sofia;
+- `debug-engineering`: chat=Patrícia, workspace=Rafael;
+- `backend-quality`: chat=Renato, workspace=Eduardo.
+
+Use um `--instance` distinto para cada equipe. O profile `backend-quality` foi
+projetado para `--instance=notebook-team3`; a ativação operacional depende dos gates
+de isolamento e identidade descritos em `docs/INSTANCIAS.md`.
+
 ## Desenvolvimento
 
 ```bash

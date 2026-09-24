@@ -18,6 +18,8 @@ const EMILY = loadManifest('../../agents/emily.json');
 const SOFIA = loadManifest('../../agents/sofia.json');
 const PATRICIA = loadManifest('../../agents/patricia.json');
 const RAFAEL = loadManifest('../../agents/rafael.json');
+const RENATO = loadManifest('../../agents/renato.json');
+const EDUARDO = loadManifest('../../agents/eduardo.json');
 
 export const DEFAULT_AGENT_PROFILE = 'audit-architecture';
 
@@ -30,12 +32,28 @@ const AGENT_PROFILES = Object.freeze({
     chat: PATRICIA,
     workspace: RAFAEL,
   }),
+  'backend-quality': Object.freeze({
+    chat: RENATO,
+    workspace: EDUARDO,
+  }),
 });
 
 export function agentBindingsForProfile(profile = DEFAULT_AGENT_PROFILE) {
   const bindings = AGENT_PROFILES[String(profile || '')];
   if (!bindings) throw new Error('unknown_agent_profile');
   return bindings;
+}
+
+const AGENT_PROFILE_MISSION_IDS = Object.freeze({
+  'audit-architecture': 'MCF-DUAL-AGENT-IDENTITY-001',
+  'debug-engineering': 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003',
+  'backend-quality': 'MCF-DUAL-BROWSER-TEAM3-BACKEND-QUALITY-001',
+});
+
+export function agentMissionIdForProfile(profile = DEFAULT_AGENT_PROFILE) {
+  const missionId = AGENT_PROFILE_MISSION_IDS[String(profile || '')];
+  if (!missionId) throw new Error('unknown_agent_profile');
+  return missionId;
 }
 
 const BINDINGS = agentBindingsForProfile();

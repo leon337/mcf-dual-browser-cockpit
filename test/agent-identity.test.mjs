@@ -4,6 +4,7 @@ import {
   AGENT_IDENTITY_SCHEMA,
   agentBindingForPane,
   agentBindingsForProfile,
+  agentMissionIdForProfile,
   paneForAgent,
   validateCanonicalAgent,
   buildIdentityBootstrap,
@@ -220,4 +221,33 @@ test('agent profiles preserve default bindings and expose Patrícia/Rafael as an
   assert.equal(paneForAgent('Rafael', expansion), 'workspace');
   assert.throws(() => paneForAgent('Emily', expansion), /unknown_canonical_agent/);
   assert.throws(() => agentBindingsForProfile('unknown'), /unknown_agent_profile/);
+});
+
+
+test('backend-quality binds Renato/Eduardo and owns an explicit runtime mission id', () => {
+  const team3 = agentBindingsForProfile('backend-quality');
+
+  assert.equal(team3.chat.agentId, 'Renato');
+  assert.equal(team3.chat.role, 'Qualidade e Testes');
+  assert.equal(team3.chat.contractRef, 'docs/agentes/RENATO.md');
+  assert.equal(team3.chat.pane, 'chat');
+
+  assert.equal(team3.workspace.agentId, 'Eduardo');
+  assert.equal(team3.workspace.role, 'Engenharia Backend');
+  assert.equal(team3.workspace.contractRef, 'docs/agentes/EDUARDO.md');
+  assert.equal(team3.workspace.pane, 'workspace');
+
+  assert.equal(paneForAgent('Renato', team3), 'chat');
+  assert.equal(paneForAgent('Eduardo', team3), 'workspace');
+  assert.throws(() => paneForAgent('Rafael', team3), /unknown_canonical_agent/);
+
+  assert.equal(
+    agentMissionIdForProfile('backend-quality'),
+    'MCF-DUAL-BROWSER-TEAM3-BACKEND-QUALITY-001',
+  );
+  assert.equal(
+    agentMissionIdForProfile('debug-engineering'),
+    'MCF-DUAL-BROWSER-TEAM-EXPANSION-003',
+  );
+  assert.throws(() => agentMissionIdForProfile('unknown'), /unknown_agent_profile/);
 });
