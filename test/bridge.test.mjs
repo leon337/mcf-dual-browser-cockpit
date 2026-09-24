@@ -411,6 +411,225 @@ test('message transport does not submit when native insertion is not observed', 
   assert.equal(submitCalls, 0);
 });
 
+test('CR-01: unconfirmed delivery after one submit never resubmits or clicks Stop', async () => {
+  let insertCalls = 0;
+  let submitClicks = 0;
+  let submitGuardCalls = 0;
+  let stopClicks = 0;
+  let verificationCalls = 0;
+  let generationActive = false;
+
+  const wc = {
+    isDestroyed: () => false,
+    getURL: () => 'https://chatgpt.com/c/cr01',
+    getTitle: () => 'chat',
+    executeJavaScript: async script => {
+      if (script.includes('stopControl.click')) stopClicks += 1;
+
+      if (script.includes('MCF_MESSAGE_COMPOSER_READINESS')) {
+        return {
+          ok: true,
+          composerPresent: true,
+          composerEditable: true,
+          generationActive: false,
+          stopControl: null,
+        };
+      }
+      if (script.includes('const enforceChatMode')) {
+        return {
+          ok: true,
+          baseline: {
+            url: 'https://chatgpt.com/c/cr01',
+            userMessageCount: 1,
+            lastUserMessageId: 'user-before',
+            lastAssistantMessageId: 'assistant-before',
+          },
+        };
+      }
+      if (script.includes('MCF_MESSAGE_INSERT_VERIFICATION')) {
+        return {
+          ok: true,
+          composerPresent: true,
+          actualLength: 12,
+          expectedLength: 12,
+        };
+      }
+      if (script.includes('chat_send_control_not_found')) {
+        submitGuardCalls += 1;
+        submitClicks += 1;
+        generationActive = true;
+        return { ok: true, method: 'button' };
+      }
+      if (script.includes('conversationAdvanced')) {
+        verificationCalls += 1;
+        assert.equal(generationActive, true);
+        return {
+          ok: true,
+          composerCleared: true,
+          conversationAdvanced: false,
+          sent: false,
+          url: 'https://chatgpt.com/c/cr01',
+          userMessageCount: 1,
+          lastUserMessageId: 'user-before',
+          lastAssistantMessageId: 'assistant-before',
+          baselineLastAssistantMessageId: 'assistant-before',
+        };
+      }
+      if (script.includes('MCF_DRAFT_CLEANUP')) {
+        return {
+          ok: true,
+          cleaned: true,
+          remainingLength: 0,
+        };
+      }
+      return { ok: true };
+    },
+    insertText: async () => { insertCalls += 1; },
+  };
+
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    getPaneWebContents: () => wc,
+    captureDir: os.tmpdir(),
+    instanceId: 'test',
+    messageComposerReadyTimeoutMs: 20,
+    messageComposerReadyPollMs: 1,
+  });
+
+  const result = await bridge.sendMessage('chat', 'mission CR01');
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'message_send_unconfirmed');
+  assert.equal(insertCalls, 1);
+  assert.equal(submitGuardCalls, 1);
+  assert.equal(submitClicks, 1);
+  assert.equal(stopClicks, 0);
+  assert.equal(verificationCalls, 20);
+});
+
+test('CR-14: Stop appearing after insert blocks submit without clicking it', async () => {
+  let insertCalls = 0;
+  let submitGuardCalls = 0;
+  let submitClicks = 0;
+  let stopClicks = 0;
+
+  const wc = {
+    isDestroyed: () => false,
+    getURL: () => 'https://chatgpt.com/c/cr14',
+    getTitle: () => 'chat',
+    executeJavaScript: async script => {
+      if (script.includes('stopControl.click')) stopClicks += 1;
+
+      if (script.includes('MCF_MESSAGE_COMPOSER_READINESS')) {
+        return {
+          ok: true,
+          composerPresent: true,
+          composerEditable: true,
+          generationActive: false,
+          stopControl: null,
+        };
+      }
+      if (script.includes('const enforceChatMode')) {
+        return {
+          ok: true,
+          baseline: {
+            url: 'https://chatgpt.com/c/cr14',
+            userMessageCount: 1,
+            lastUserMessageId: 'user-before',
+            lastAssistantMessageId: 'assistant-before',
+          },
+        };
+      }
+      if (script.includes('MCF_MESSAGE_INSERT_VERIFICATION')) {
+        return {
+          ok: true,
+          composerPresent: true,
+          actualLength: 12,
+          expectedLength: 12,
+        };
+      }
+      if (script.includes('chat_send_control_not_found')) {
+        submitGuardCalls += 1;
+        return {
+          ok: false,
+          error: 'message_send_blocked_generation_active',
+        };
+      }
+      if (script.includes('MCF_DRAFT_CLEANUP')) {
+        return {
+          ok: true,
+          cleaned: true,
+          remainingLength: 0,
+        };
+      }
+      if (script.includes('send.click')) submitClicks += 1;
+      return { ok: true };
+    },
+    insertText: async () => { insertCalls += 1; },
+  };
+
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    getPaneWebContents: () => wc,
+    captureDir: os.tmpdir(),
+    instanceId: 'test',
+    messageComposerReadyTimeoutMs: 20,
+    messageComposerReadyPollMs: 1,
+  });
+
+  const result = await bridge.sendMessage('chat', 'mission CR14');
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'message_send_blocked_generation_active');
+  assert.equal(insertCalls, 1);
+  assert.equal(submitGuardCalls, 1);
+  assert.equal(submitClicks, 0);
+  assert.equal(stopClicks, 0);
+});
+
+test('CR-15: present but non-editable composer blocks insert and submit', async () => {
+  let readinessCalls = 0;
+  let insertCalls = 0;
+  let submitGuardCalls = 0;
+
+  const wc = {
+    isDestroyed: () => false,
+    getURL: () => 'https://chatgpt.com/c/cr15',
+    getTitle: () => 'chat',
+    executeJavaScript: async script => {
+      if (script.includes('MCF_MESSAGE_COMPOSER_READINESS')) {
+        readinessCalls += 1;
+        return {
+          ok: false,
+          composerPresent: true,
+          composerEditable: false,
+          generationActive: false,
+          stopControl: null,
+        };
+      }
+      if (script.includes('chat_send_control_not_found')) submitGuardCalls += 1;
+      return { ok: true };
+    },
+    insertText: async () => { insertCalls += 1; },
+  };
+
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    getPaneWebContents: () => wc,
+    captureDir: os.tmpdir(),
+    instanceId: 'test',
+    messageComposerReadyTimeoutMs: 5,
+    messageComposerReadyPollMs: 1,
+  });
+
+  const result = await bridge.sendMessage('chat', 'mission CR15');
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'chat_composer_not_ready');
+  assert.equal(result.readiness?.composerPresent, true);
+  assert.equal(result.readiness?.composerEditable, false);
+  assert.ok(readinessCalls >= 1);
+  assert.equal(insertCalls, 0);
+  assert.equal(submitGuardCalls, 0);
+});
+
 
 test('browser automation routes target chat or workspace explicitly', async t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-pane-routes-'));
