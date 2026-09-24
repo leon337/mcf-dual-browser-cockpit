@@ -58,9 +58,20 @@ test('HTTP bridge security and concurrency', async t => {
   bridge.setPaused(false);
   const pending = request('/v1/navigate', {url:'https://example.test'});
   while (!release) await new Promise(resolve => setTimeout(resolve, 5));
-  assert.equal((await request('/v1/navigate', {url:'https://other.test'})).status, 409);
-  bridge.setPaused(true); release(); assert.equal((await pending).status, 200);
-  assert.equal(calls, 1); bridge.setPaused(false);
+  const releaseFirst = release;
+  release = null;
+  const queued = request('/v1/navigate', {url:'https://other.test'});
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.equal(calls, 1);
+  assert.equal(bridge.getState().busy, true);
+  assert.equal(bridge.getState().queueDepth, 1);
+  releaseFirst();
+  assert.equal((await pending).status, 200);
+  while (!release) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(calls, 2);
+  assert.equal(bridge.getState().queueDepth, 0);
+  bridge.setPaused(true); release(); assert.equal((await queued).status, 200);
+  bridge.setPaused(false);
   assert.equal((await request('/v1/upload-file', {file:path.join(approved,'escape.txt')})).status, 403);
   assert.equal((await request('/v1/navigate', {url:'https://user:password@example.test'})).status, 400);
   const malformed = await fetch(url+'/v1/navigate', {method:'POST',headers:{Authorization:`Bearer ${bridge.token}`},body:'{'});
@@ -72,6 +83,81 @@ test('HTTP bridge security and concurrency', async t => {
   assert.equal(page.nodes[0].text, '');
   assert.ok(!JSON.stringify(page).includes('DO_NOT_LEAK'));
   const oldToken = bridge.token; await bridge.stop(); await bridge.start(0); assert.notEqual(oldToken, bridge.token);
+});
+
+test('HTTP bridge mutation queues remain isolated across instances', async t => {
+  const dirA = mkdtempSync(path.join(os.tmpdir(), 'mcf-bridge-a-'));
+  const dirB = mkdtempSync(path.join(os.tmpdir(), 'mcf-bridge-b-'));
+  let releaseA = null;
+  let startedA = 0;
+  let startedB = 0;
+  let urlA = 'https://example.test/a';
+  let urlB = 'https://example.test/b';
+
+  const wcA = {
+    isDestroyed: () => false,
+    getURL: () => urlA,
+    getTitle: () => 'instance-a',
+    isLoading: () => false,
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    loadURL: async (target) => {
+      startedA += 1;
+      urlA = target;
+      await new Promise(resolve => { releaseA = resolve; });
+    },
+  };
+  const wcB = {
+    isDestroyed: () => false,
+    getURL: () => urlB,
+    getTitle: () => 'instance-b',
+    isLoading: () => false,
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    loadURL: async (target) => {
+      startedB += 1;
+      urlB = target;
+    },
+  };
+
+  const bridgeA = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wcA,
+    captureDir: dirA,
+    instanceId: 'instance-a',
+  });
+  const bridgeB = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wcB,
+    captureDir: dirB,
+    instanceId: 'instance-b',
+  });
+
+  await Promise.all([bridgeA.start(0), bridgeB.start(0)]);
+  t.after(async () => {
+    releaseA?.();
+    await Promise.all([bridgeA.stop(), bridgeB.stop()]);
+    rmSync(dirA, { recursive: true });
+    rmSync(dirB, { recursive: true });
+  });
+
+  const post = (bridge, body) => fetch(`http://127.0.0.1:${bridge.port}/v1/navigate`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${bridge.token}`,
+      'X-MCF-Instance': bridge.instanceId,
+    },
+    body: JSON.stringify(body),
+  });
+
+  const pendingA = post(bridgeA, { url: 'https://example.test/a-blocked' });
+  while (!releaseA) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(startedA, 1);
+  assert.equal(bridgeA.getState().busy, true);
+
+  const responseB = await post(bridgeB, { url: 'https://example.test/b-parallel' });
+  assert.equal(responseB.status, 200);
+  assert.equal(startedB, 1);
+  assert.equal(bridgeB.getState().busy, false);
+
+  releaseA();
+  assert.equal((await pendingA).status, 200);
 });
 
 
