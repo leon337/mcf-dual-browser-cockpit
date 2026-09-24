@@ -2,6 +2,7 @@ import {
   agentBindingForPane,
   paneForAgent,
   validateCanonicalAgent,
+  validateCanonicalSession,
   buildIdentityBootstrap,
   createMissionEnvelope,
   formatMissionEnvelope,
@@ -146,10 +147,20 @@ export class PaneAgentRuntime {
     this.paneMissionQueues = new Map();
     const loaded = loadState();
     if (loaded?.schema === PANE_AGENT_RUNTIME_SCHEMA) {
+      if (loaded.instanceId && loaded.instanceId !== instanceId) {
+        throw new Error('agent_runtime_instance_mismatch');
+      }
+      if (loaded.missionId && loaded.missionId !== missionId) {
+        throw new Error('agent_runtime_profile_mismatch');
+      }
       for (const pane of PANES) {
-        const persistedAgentId = loaded?.bindings?.[pane]?.agentId;
-        const configuredAgentId = agentBindingForPane(pane, this.agentBindings).agentId;
-        if (persistedAgentId && persistedAgentId !== configuredAgentId) {
+        const persisted = loaded?.bindings?.[pane];
+        const configured = agentBindingForPane(pane, this.agentBindings);
+        if (persisted && (
+          (persisted.agentId && persisted.agentId !== configured.agentId)
+          || (persisted.role && persisted.role !== configured.role)
+          || (persisted.contractRef && persisted.contractRef !== configured.contractRef)
+        )) {
           throw new Error('agent_binding_profile_mismatch');
         }
       }
@@ -950,13 +961,8 @@ export class PaneAgentRuntime {
         && typeof this.broker.showSession === 'function') {
       try {
         const session = await this.broker.showSession(current.sessionId);
-        if (session
-            && session.agentId === canonicalBinding.agentId
-            && session.role === canonicalBinding.role
-            && session.contractRef === canonicalBinding.contractRef
-            && session.contractDigest === canonicalBinding.contractDigest) {
-          return { session, reused: true };
-        }
+        validateCanonicalSession(canonicalBinding, session);
+        return { session, reused: true };
       } catch {
         // Fall through to a fresh canonical session.
       }
@@ -970,6 +976,7 @@ export class PaneAgentRuntime {
         + ', obedecendo ao contrato canônico MCF e à autoridade de LEANDRO/MESTRE.',
       surface: 'dual-browser-pane:' + pane,
     });
+    validateCanonicalSession(canonicalBinding, session);
     return { session, reused: false };
   }
 

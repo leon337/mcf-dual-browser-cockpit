@@ -114,16 +114,25 @@ export function validateCanonicalAgent(binding, canonical) {
   });
 }
 
+export function validateCanonicalSession(binding, session) {
+  const bindingDigest = String(binding?.contractDigest || '');
+  const sessionDigest = String(session?.contractDigest || '');
+  const valid = binding
+    && session
+    && session.agentId === binding.agentId
+    && session.role === binding.role
+    && session.contractRef === binding.contractRef
+    && /^[a-f0-9]{64}$/.test(bindingDigest)
+    && sessionDigest === bindingDigest;
+  if (!valid) throw new Error('identity_session_mismatch');
+  return session;
+}
+
 export function buildIdentityBootstrap({ binding, session }) {
   if (!binding?.agentId || !session?.sessionId || !session?.traceId || !session?.bootstrap) {
     throw new Error('invalid_identity_bootstrap_input');
   }
-  if (session.agentId !== binding.agentId
-      || session.role !== binding.role
-      || session.contractRef !== binding.contractRef
-      || !/^[a-f0-9]{64}$/.test(String(session.contractDigest || ''))) {
-    throw new Error('identity_session_mismatch');
-  }
+  validateCanonicalSession(binding, session);
   return [
     '[MCF PANE AGENT IDENTITY]',
     'schema: ' + AGENT_IDENTITY_SCHEMA,
