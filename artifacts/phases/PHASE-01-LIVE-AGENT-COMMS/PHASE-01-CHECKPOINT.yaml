@@ -3,58 +3,26 @@ phase_id: PHASE-01-LIVE-AGENT-COMMS
 class: C
 authority: LEANDRO
 orchestrator: MESTRE
-state: READY_FOR_MERGE_PR_8
+state: DOCUMENTATION_REMEDIATED_AWAITING_R4
 baseline_sha: 6fcc47c4b64f6f5d8b93f09b96d8f98947c9fdb8
 version: 0.6.0
 release_code_sha: c11e3984fc76a19780593d35eaabc7f903193322
 appimage_sha256: ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951
-executable_ci:
-  workflow: Checks
-  run_number: 77
-  run_id: 35995227792
-  conclusion: SUCCESS
-  sha: c11e3984fc76a19780593d35eaabc7f903193322
-validation:
-  check: PASS
-  tests: 55/55_PASS
-  diff_check: PASS
-production:
-  status: EXACT_ARTIFACT_ACTIVE
-  notebook: PASS
-  notebook_team2: PASS
-smoke:
-  parent: MCF-LIVE-AGENT-COMMS-001-LIVE-SMOKE-R1
-  agents_completed: 4
-  notebook_closable: true
-  notebook_team2_closable: true
-  replay_disconnect_reconnect: PASS
-  replay_count: 15
-  terminal_body_gate: PASS
-audit_r1:
-  result_sha256: acfb7e5a57ab1756493561191deaebaef863912fb3ac3a42c998901ff058953f
-  decision: FAIL
-  critical: 0
-  high: 1
-  scope: DOCUMENTATION_ONLY
-  remediation: APPLIED
-audit_r2:
-  result_sha256: 7630b74f93c60136eb394b196d823956c7ffe94dcdbf25b8deda210324570500
-  decision: PASS
-  critical: 0
-  high: 0
-  status: SUPERSEDED_AS_FINAL_GATE_BY_EXACT_ARTIFACT_PROMOTION
-audit_r3:
-  state: COMPLETED
-  decision: PASS
-  result_sha256: 94b73f9af663672aab5afbbd20f910a3c46290968d2eb6c3eadad05e01ca7ea0
-  critical: 0
-  high: 0
-  medium_blocker: 0
-  low_blocker: 0
-  residual_requirements: NONE
-next_gate: MERGE_PR_8
-authorization:
-  finalize_and_production: AUTHORIZED_BY_LEANDRO
+executable_ci: Checks_77_SUCCESS
+validation: 55_of_55_PASS
+production: EXACT_ARTIFACT_ACTIVE
+smoke: FOUR_OF_FOUR_COMPLETED
+replay_disconnect_reconnect: PASS_15_EVENTS
+audit_r1: FAIL_DOCUMENTATION_ONLY
+audit_r2: PASS_SUPERSEDED_BY_ARTIFACT_PROMOTION
+audit_r3_4d51: PASS_SUPERSEDED_BY_NEWER_CLOSEOUT
+audit_r3_5e33: FAIL_DOCUMENTATION_ONLY_PRF_CLOSEOUT_0_6_0_002
+remediation:
+  - pr_metadata_to_current_head_and_ci
+  - visual_hashes_text_matches_versioned_pngs
+  - r2_json_restored_and_manifest_regenerated
+next_gate: EMILY_SHORT_CONSISTENCY_R4
+authorization: FINALIZE_AND_PRODUCTION_AUTHORIZED_BY_LEANDRO
 prohibitions:
   - do_not_merge_pr_6_without_separate_leandro_decision
   - do_not_delete_mcf_agent_lifecycle_002_untracked_evidence

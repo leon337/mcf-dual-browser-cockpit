@@ -1,0 +1,16 @@
+MCF-LIVE-AGENT-COMMS-001 — Emily exact-artifact audit against closeout 5e33
+mission=MCF-LIVE-AGENT-COMMS-001-EMILY-EXACT-R3
+envelope=afa91677-e12c-49df-9b4a-a4dd0f162aa2
+state=COMPLETED
+result_sha256=e3de0653ad0d108201a5d61c04f24db4789165211c8c9e630ac12505b92e7891
+decision=FAIL
+critical=0
+high=1
+high_id=PRF-CLOSEOUT-0.6.0-002
+scope=documentation_and_traceability_only
+functional_release=PASS
+release_code_sha=c11e3984fc76a19780593d35eaabc7f903193322
+audited_closeout_head=5e33e9f2e813ba13dc4f9b2bfd2027bcb5777492
+audited_closeout_checks=Checks_83_SUCCESS
+appimage_sha256=ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951
+residual=correct PR metadata; correct visual evidence description; include all canonical evidence in manifest

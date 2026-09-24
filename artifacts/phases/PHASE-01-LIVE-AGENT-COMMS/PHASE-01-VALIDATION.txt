@@ -1,51 +1,19 @@
-MCF-LIVE-AGENT-COMMS-001
-PHASE-01 validation
+MCF-LIVE-AGENT-COMMS-001 — validation after R3 documentation finding
 
-Executable release identity:
-version=0.6.0
 release_code_sha=c11e3984fc76a19780593d35eaabc7f903193322
+version=0.6.0
 appimage_sha256=ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951
+release_ci=Checks_77_SUCCESS
+npm_check=PASS
+npm_test=55/55_PASS
+git_diff_check=PASS
+exact_four_agent_smoke=PASS
+exact_reconnect_replay=PASS_replayCount_15
+production_two_instances=PASS
 
-Local qualification:
-npm run check=PASS
-npm test=55/55 PASS
-git diff --check=PASS
-
-Remote executable qualification:
-GitHub Actions Checks #77
-run_id=35995227792
-conclusion=SUCCESS
-checked_sha=c11e3984fc76a19780593d35eaabc7f903193322
-
-Exact local production:
-notebook=PASS
-notebook-team2=PASS
-installed AppImage hash matches candidate=ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951
-
-Four-agent exact smoke:
-PASS
-Emily=COMPLETED da133c4642590486d68515951a05b1dbf525673a3c8f6c9c50c7e58ba83f945b
-Sofia=COMPLETED 18bef27686f6b8d06745939e0b70187be1c006d36fa7c491b6517b6b528a5409
-Patrícia=COMPLETED 589cd31a8fbc8b9f2a1a0e47f73703de2408016776d9856f51144cd591946749
-Rafael=COMPLETED e3d8d8904506b7d5634115b38a2c67c039a4d68bc92244371e01a9215543e05b
-
-Replay/reconnect exact:
-PASS
-replayCount=15
-terminal body gate=PASS
-
-Instance isolation:
-PASS
-
-Audit lineage:
-R1 result=acfb7e5a57ab1756493561191deaebaef863912fb3ac3a42c998901ff058953f decision=FAIL documentation-only
-R2 result=7630b74f93c60136eb394b196d823956c7ffe94dcdbf25b8deda210324570500 decision=PASS status=SUPERSEDED_AS_FINAL_GATE
-
-Final independent audit R3:
-PASS
-result=94b73f9af663672aab5afbbd20f910a3c46290968d2eb6c3eadad05e01ca7ea0
-Critical=0 High=0 Medium blocker=0 Low blocker=0
-Residual technical/evidence requirements=NONE
-
-Current gate:
-MERGE_PR_8
+audit_r1=FAIL_DOCUMENTATION_ONLY
+audit_r2=PASS_SUPERSEDED
+audit_r3_4d51=PASS_SUPERSEDED
+audit_r3_5e33=FAIL_DOCUMENTATION_ONLY_PRF-CLOSEOUT-0.6.0-002
+functional_release_status=PASS
+current_gate=R4_SHORT_CONSISTENCY_AUDIT_REQUIRED

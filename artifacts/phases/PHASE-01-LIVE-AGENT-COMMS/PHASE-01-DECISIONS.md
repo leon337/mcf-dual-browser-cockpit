@@ -1,20 +1,14 @@
 # PHASE-01 Decisions
 
-1. LEANDRO authorized continuous implementation, finalization and local production deployment for this mission.
-2. Baseline is PR #7 head 6fcc47c4…; PR #6 remains outside this merge decision.
-3. Sofia required runtime authority, persist-before-publish and a boot epoch for replay.
-4. Emily required no terminal claim during active generation, explicit replay gaps and a four-agent real smoke.
-5. Patrícia required bounded conversation/DOM anchor loss and release of same-pane queues.
-6. Rafael required a semantic journal between runtime/WebContents and SSE.
-7. MESTRE implemented instance-local bootId:sequence replay, exact instance header, heartbeat and read-only SSE.
-8. RESULT_CAPTURED carries no result body; COMPLETED carries body only after read-back integrity.
-9. Executable release code SHA is c11e3984fc76a19780593d35eaabc7f903193322.
-10. A same-version AppImage mismatch was detected during promotion and rejected as final evidence.
-11. Exact AppImage ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951 was promoted atomically to notebook and notebook-team2; the prior image remains rollback-only.
-12. Exact four-agent smoke parent MCF-LIVE-AGENT-COMMS-001-LIVE-SMOKE-R1 closed 2/2 on each instance.
-13. Deliberate disconnect/reconnect from team2 cursor ...:65 replayed 15 events and recovered a Rafael probe through WORKING, RESULT_CAPTURED and COMPLETED without redispatch.
-14. Emily R1 found no functional Critical/High; its single High concerned stale closeout documentation.
-15. The documentation finding was remediated.
-16. Emily R2 returned PASS on that remediation, but it is retained only as lineage because the production AppImage was subsequently corrected to the exact candidate.
-17. Emily R3 independently audited the exact artifact and current closeout head and returned PASS, result 94b73f9af663672aab5afbbd20f910a3c46290968d2eb6c3eadad05e01ca7ea0, with Critical=0, High=0, Medium blocker=0, Low blocker=0, and no residual technical/evidence requirement.
-18. MESTRE sets the gate to READY_FOR_MERGE_PR_8 under LEANDRO's standing authorization for this mission.
+1. LEANDRO authorized continuous implementation, finalization and local production for this mission.
+2. Executable release is fixed at c11e3984fc76a19780593d35eaabc7f903193322 and AppImage ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951.
+3. Runtime remains authoritative; SSE is read-only observability.
+4. Exact four-agent smoke and deliberate replay/reconnect passed.
+5. R1 failed only on stale documentation.
+6. R2 passed but was superseded after exact artifact promotion.
+7. A prior R3 PASS on 4d51 is lineage only and was superseded by the newer closeout.
+8. The valid R3 against 5e33 failed only on PRF-CLOSEOUT-0.6.0-002; it explicitly kept the executable technically qualified.
+9. PRF-CLOSEOUT-0.6.0-002 is remediated by correcting visual evidence description, restoring R2 JSON, regenerating the complete manifest and rebinding PR metadata to the remediation HEAD/CI.
+10. Merge remains blocked until a short independent R4 consistency audit passes.
+11. PR #6 remains outside this mission and is not merged.
+12. MCF-AGENT-LIFECYCLE-002 untracked evidence remains untouched.

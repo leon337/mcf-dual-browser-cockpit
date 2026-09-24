@@ -1,90 +1,40 @@
-MCF-LIVE-AGENT-COMMS-001 — Full validation evidence
+MCF-LIVE-AGENT-COMMS-001 — canonical release evidence after R3
 
-EXECUTABLE RELEASE IDENTITY
-version=0.6.0
+EXECUTABLE
 release_code_sha=c11e3984fc76a19780593d35eaabc7f903193322
+version=0.6.0
 appimage_sha256=ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951
+checks_77=SUCCESS
+local_tests=55/55_PASS
 
-LOCAL QUALIFICATION
-npm_run_check=PASS
-npm_test=55/55 PASS
-git_diff_check=PASS
+PRODUCTION
+notebook=0.6.0_audit-architecture_exact_artifact
+notebook-team2=0.6.0_debug-engineering_exact_artifact
+four_agent_smoke=PASS
+parent_notebook=required2_completed2_active0_closable_true
+parent_team2=required2_completed2_active0_closable_true
+replay_disconnect_reconnect=PASS
+replay_count=15
+terminal_body_gate=PASS
 
-REMOTE EXECUTABLE QUALIFICATION
-github_pr=8
-checks_run_number=77
-checks_run_id=35995227792
-checks_conclusion=SUCCESS
-checked_release_code_sha=c11e3984fc76a19780593d35eaabc7f903193322
-
-PRODUCTION DEPLOYMENT
-notebook_version=0.6.0
-notebook_profile=audit-architecture
-notebook_bridge=HEALTHY
-notebook_team2_version=0.6.0
-notebook_team2_profile=debug-engineering
-notebook_team2_bridge=HEALTHY
-installed_appimage_sha256=ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951
-
-EXACT FOUR-AGENT SMOKE
-parent=MCF-LIVE-AGENT-COMMS-001-LIVE-SMOKE-R1
-Emily=COMPLETED result_sha256=da133c4642590486d68515951a05b1dbf525673a3c8f6c9c50c7e58ba83f945b completed_event=305a0e27-db08-499a-8b48-813eaab9d0cd:80
-Sofia=COMPLETED result_sha256=18bef27686f6b8d06745939e0b70187be1c006d36fa7c491b6517b6b528a5409 completed_event=305a0e27-db08-499a-8b48-813eaab9d0cd:61
-Patrícia=COMPLETED result_sha256=589cd31a8fbc8b9f2a1a0e47f73703de2408016776d9856f51144cd591946749 completed_event=25dfbc01-b745-4f1c-9881-4be1d0540cb4:49
-Rafael=COMPLETED result_sha256=e3d8d8904506b7d5634115b38a2c67c039a4d68bc92244371e01a9215543e05b completed_event=25dfbc01-b745-4f1c-9881-4be1d0540cb4:64
-
-PARENT BARRIERS
-notebook required=2 completed=2 active=0 closable=true
-notebook-team2 required=2 completed=2 active=0 closable=true
-
-LIVE TERMINAL INTEGRITY
-RESULT_CAPTURED bodyAvailable=false for all four
-COMPLETED bodyAvailable=true for all four
-COMPLETED hash matches persisted mission result for all four
-
-DELIBERATE DISCONNECT/RECONNECT
-instance=notebook-team2
-cursor_before_disconnect=25dfbc01-b745-4f1c-9881-4be1d0540cb4:65
-initial_connected_then_disconnected=true
-reconnect_replay_count=15
-reset_required=false
-probe_envelope=bebfa9f4-901f-43ff-ae4d-4f6fc1d34037
-replayed_working=true
-replayed_result_captured=true
-replayed_completed=true
-result_captured_body_available=false
-completed_body_available=true
-probe_result_sha256=ce9414dd04fe18993f14c6ee66a2f61988d11ff236f73aba807c4e6840e636ad
-
-ISOLATION
-two_bridge_automated_isolation_test=PASS
-cross_instance_leak_observed=false
-
-EXACT VISUAL EVIDENCE
-notebook_chat=4dd301f1c186e108586c075313920001320cd5eaa89f307d2022881f6526dd9d
-notebook_workspace=70e5759af40442e1371c4a37e8343207871dd6eb2725fffd302727667aed9522
-notebook_team2_chat=0d6772c5a4cc7ea0164276f78803399c7ae5c4c507a4a198788508c99cec834a
-notebook_team2_workspace=c2a448dbb048a099d4d95cb2207fee5ac748689ab98c4a8f4698dfab637a2fc9
-
-AUDIT LINEAGE
-R1_result_sha256=acfb7e5a57ab1756493561191deaebaef863912fb3ac3a42c998901ff058953f
-R1_decision=FAIL
-R1_scope=documentation_only
-R2_result_sha256=7630b74f93c60136eb394b196d823956c7ffe94dcdbf25b8deda210324570500
-R2_decision=PASS
-R2_status=SUPERSEDED_AS_FINAL_GATE_BY_EXACT_ARTIFACT_PROMOTION
-
-FINAL EXACT AUDIT R3
-mission=MCF-LIVE-AGENT-COMMS-001-EMILY-FINAL-EXACT-R3
-envelope=4d8ab120-f2cf-4e3d-9ed0-89a61b32ac1e
-state=COMPLETED
-result_sha256=94b73f9af663672aab5afbbd20f910a3c46290968d2eb6c3eadad05e01ca7ea0
-decision=PASS
+R3_5E33
+mission=MCF-LIVE-AGENT-COMMS-001-EMILY-EXACT-R3
+envelope=afa91677-e12c-49df-9b4a-a4dd0f162aa2
+result_sha256=e3de0653ad0d108201a5d61c04f24db4789165211c8c9e630ac12505b92e7891
+decision=FAIL
 critical=0
-high=0
-medium_blocker=0
-low_blocker=0
-residual_requirements=NONE
+high=1
+finding=PRF-CLOSEOUT-0.6.0-002
+scope=documentation_and_traceability_only
+functional_release=PASS
 
-NEXT GATE
-MERGE_PR_8
+REMEDIATION
+visual_hashes_description=CORRECTED
+r2_json=RESTORED
+manifest=REGENERATED_COMPLETE_DIRECTORY_SCOPE
+pr_metadata=TO_BE_BOUND_TO_REMEDIATION_HEAD_AND_CI_BEFORE_R4
+next_gate=EMILY_R4_SHORT_CONSISTENCY
+
+BOUNDARIES
+pr6_merge=NOT_PERFORMED
+mcf_agent_lifecycle_002_untracked_evidence=UNTOUCHED

@@ -1,0 +1,24 @@
+{
+  "schema": "mcf-independent-audit-closeout/v1",
+  "missionId": "MCF-LIVE-AGENT-COMMS-001-EMILY-POST-REMEDIATION-R2",
+  "parentMissionId": "MCF-LIVE-AGENT-COMMS-001",
+  "envelopeId": "56d35f67-f5e3-4d7b-9f02-8b3b2ec71a4b",
+  "agentId": "Emily",
+  "role": "Auditoria Independente",
+  "state": "COMPLETED",
+  "resultSha256": "7630b74f93c60136eb394b196d823956c7ffe94dcdbf25b8deda210324570500",
+  "decision": "PASS",
+  "blockers": {
+    "critical": 0,
+    "high": 0
+  },
+  "finding": {
+    "id": "PRF-CLOSEOUT-0.6.0-001",
+    "status": "REMOVED"
+  },
+  "auditedCloseoutHead": "99f8b60d1ae112f63345b8c0308ef6cbca71ff0d",
+  "status": "SUPERSEDED_AS_FINAL_GATE_BY_EXACT_ARTIFACT_PROMOTION",
+  "historicalAppImageSha256": "07293708ed3a8ac8aa6d21cb9d6a3813db6015737ee252772edda8a0678dedce",
+  "currentExactAppImageSha256": "ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951",
+  "nextGate": "EMILY_FINAL_EXACT_ARTIFACT_AUDIT_R3"
+}

@@ -15,3 +15,6 @@ appimage_sha256=ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951
 release_status=QUALIFIED
 closeout_status=CONSISTENT
 residual_technical_or_evidence_requirements=NONE
+
+status=SUPERSEDED_BY_5E33_EXACT_CLOSEOUT_AUDIT
+note=PASS remains lineage only; not the final gate.
