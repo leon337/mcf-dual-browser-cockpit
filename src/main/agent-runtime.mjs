@@ -25,6 +25,12 @@ const DEFAULT_START_TIMEOUT_RECOVERY_MS = 6 * 60 * 1000;
 const DEFAULT_ACTIVITY_LEASE_MS = 90 * 1000;
 const DEFAULT_ASSISTANT_START_HARD_TIMEOUT_MS = 15 * 60 * 1000;
 const DEFAULT_RESULT_HARD_TIMEOUT_MS = 45 * 60 * 1000;
+const DEFAULT_RECONCILIATION_STABILITY_MS = 3000;
+const DEFAULT_RECONCILIATION_PROBE_INTERVAL_MS = 500;
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -123,6 +129,8 @@ export class PaneAgentRuntime {
     activityLeaseMs = DEFAULT_ACTIVITY_LEASE_MS,
     assistantStartHardTimeoutMs = DEFAULT_ASSISTANT_START_HARD_TIMEOUT_MS,
     resultHardTimeoutMs = DEFAULT_RESULT_HARD_TIMEOUT_MS,
+    reconciliationStabilityMs = DEFAULT_RECONCILIATION_STABILITY_MS,
+    reconciliationProbeIntervalMs = DEFAULT_RECONCILIATION_PROBE_INTERVAL_MS,
   }) {
     if (!instanceId || !missionId || !broker || !surface) {
       throw new Error('invalid_agent_runtime_configuration');
@@ -142,6 +150,8 @@ export class PaneAgentRuntime {
     this.activityLeaseMs = Math.max(250, Number(activityLeaseMs) || DEFAULT_ACTIVITY_LEASE_MS);
     this.assistantStartHardTimeoutMs = Math.max(1000, Number(assistantStartHardTimeoutMs) || DEFAULT_ASSISTANT_START_HARD_TIMEOUT_MS);
     this.resultHardTimeoutMs = Math.max(1000, Number(resultHardTimeoutMs) || DEFAULT_RESULT_HARD_TIMEOUT_MS);
+    this.reconciliationStabilityMs = Math.max(0, Number(reconciliationStabilityMs) || 0);
+    this.reconciliationProbeIntervalMs = Math.max(25, Number(reconciliationProbeIntervalMs) || DEFAULT_RECONCILIATION_PROBE_INTERVAL_MS);
     this.missionTasks = new Map();
     this.paneMissionQueues = new Map();
     const loaded = loadState();
@@ -294,7 +304,7 @@ export class PaneAgentRuntime {
         envelopeId: id,
         state: record.state,
         cancellationRequested: true,
-        cancellationOutcome: record.cancellationOutcome ?? 'cancelled_no_effect_confirmed',
+        cancellationOutcome: record.cancellationOutcome ?? 'cancelled_execution_inactive_confirmed',
       };
     }
     if (['FAILED', 'REJECTED'].includes(record.state)) {
@@ -399,6 +409,50 @@ export class PaneAgentRuntime {
     };
   }
 
+  async #observeStableReconciliation(record) {
+    const observations = [];
+    const startedAtMs = Date.now();
+    const requiredStableUntilMs = startedAtMs + this.reconciliationStabilityMs;
+
+    while (true) {
+      const snapshot = await this.surface.inspectMissionExecution(record.pane, {
+        expectedConversationUrl: record.delivery?.url ?? null,
+        userMessageId: record.delivery?.userMessageId ?? null,
+        assistantMessageId: record.acceptedAssistantMessageId ?? null,
+      });
+      observations.push(clone(snapshot ?? null));
+
+      if (!snapshot?.ok || snapshot?.verified !== true) {
+        return { ok: false, error: snapshot?.error ?? 'reconciliation_live_verification_failed', liveEvidence: clone(snapshot ?? null), observations };
+      }
+      if (snapshot.userAnchorFound === false) {
+        return { ok: false, error: 'reconciliation_user_anchor_missing', liveEvidence: clone(snapshot), observations };
+      }
+      if (snapshot.activeExecution === true) {
+        return { ok: false, error: 'mission_execution_still_active', liveEvidence: clone(snapshot), observations };
+      }
+      if (snapshot.lateResultObserved === true) {
+        return { ok: false, error: 'late_result_recovery_required', lateResultObserved: true, liveEvidence: clone(snapshot), observations };
+      }
+
+      const nowMs = Date.now();
+      if (nowMs >= requiredStableUntilMs) {
+        return {
+          ok: true,
+          stable: true,
+          stableForMs: nowMs - startedAtMs,
+          sampleCount: observations.length,
+          liveEvidence: clone(snapshot),
+          observations,
+        };
+      }
+      await delay(Math.min(
+        this.reconciliationProbeIntervalMs,
+        Math.max(1, requiredStableUntilMs - nowMs),
+      ));
+    }
+  }
+
   async reconcileMission({
     envelopeId,
     outcome,
@@ -406,10 +460,13 @@ export class PaneAgentRuntime {
     evidence = null,
   } = {}) {
     const id = String(envelopeId || '').trim();
-    const normalizedOutcome = String(outcome || '').trim();
+    const requestedOutcome = String(outcome || '').trim();
+    const normalizedOutcome = requestedOutcome === 'cancelled_no_effect_confirmed'
+      ? 'cancelled_execution_inactive_confirmed'
+      : requestedOutcome;
     const normalizedAuthority = String(authority || '').trim();
     if (!id) return { ok: false, error: 'envelope_id_required' };
-    if (!['no_active_execution_confirmed', 'cancelled_no_effect_confirmed'].includes(normalizedOutcome)) {
+    if (!['no_active_execution_confirmed', 'cancelled_execution_inactive_confirmed'].includes(normalizedOutcome)) {
       return { ok: false, error: 'valid_reconciliation_outcome_required' };
     }
     if (!['LEANDRO', 'MESTRE'].includes(normalizedAuthority)) {
@@ -419,7 +476,7 @@ export class PaneAgentRuntime {
       return { ok: false, error: 'reconciliation_evidence_required' };
     }
 
-    const record = this.state.missions?.[id];
+    let record = this.state.missions?.[id];
     if (!record) return { ok: false, error: 'mission_not_found', envelopeId: id };
     if (!['UNVERIFIED', 'INTERRUPTED'].includes(record.state)
         || record.reconciliationRequired !== true) {
@@ -432,14 +489,19 @@ export class PaneAgentRuntime {
       };
     }
     if (!record.delivery?.url || !record.delivery?.userMessageId) {
-      return {
-        ok: false,
-        error: 'mission_reconciliation_anchor_missing',
-        envelopeId: id,
-        state: record.state,
-      };
+      const recoveredAnchor = await this.#recoverDeliveryAnchor(record);
+      if (recoveredAnchor) {
+        record = recoveredAnchor;
+      } else {
+        return {
+          ok: false,
+          error: 'mission_reconciliation_anchor_missing',
+          envelopeId: id,
+          state: record.state,
+        };
+      }
     }
-    if (normalizedOutcome === 'cancelled_no_effect_confirmed'
+    if (normalizedOutcome === 'cancelled_execution_inactive_confirmed'
         && record.cancellationRequested !== true) {
       return {
         ok: false,
@@ -457,11 +519,8 @@ export class PaneAgentRuntime {
       };
     }
 
-    const liveEvidence = await this.surface.inspectMissionExecution(record.pane, {
-      expectedConversationUrl: record.delivery.url,
-      userMessageId: record.delivery.userMessageId,
-      assistantMessageId: record.acceptedAssistantMessageId ?? null,
-    });
+    const stability = await this.#observeStableReconciliation(record);
+    const liveEvidence = stability.liveEvidence ? { ...stability.liveEvidence, stableForMs: stability.stableForMs ?? null, sampleCount: stability.sampleCount ?? stability.observations?.length ?? null } : null;
     if (!liveEvidence?.ok || liveEvidence?.verified !== true) {
       return {
         ok: false,
@@ -490,11 +549,54 @@ export class PaneAgentRuntime {
       };
     }
     if (liveEvidence.lateResultObserved === true) {
+      const context = this.#missionContext(record);
+      await this.#recoverLateResultAfterStartTimeout({
+        envelopeId: record.envelopeId,
+        pane: record.pane,
+        marker: context.marker,
+        binding: context.binding,
+        session: context.session,
+        envelope: context.envelope,
+        executionId: record.executionId,
+        userMessageId: record.delivery.userMessageId,
+        baselineAssistantMessageId: record.delivery.baselineAssistantMessageId ?? null,
+        acceptance: {
+          error: 'late_result_detected_during_reconciliation',
+          generationActive: false,
+          url: liveEvidence.url ?? record.delivery.url,
+        },
+        recoveryReason: 'late_result_detected_during_reconciliation',
+      });
+      const recovered = this.state.missions?.[id];
+      if (recovered?.state === 'COMPLETED') {
+        return {
+          ok: true,
+          envelopeId: id,
+          state: recovered.state,
+          reconciliationRequired: false,
+          outcome: 'late_result_validated',
+          recoveredLateResult: true,
+          liveEvidence: clone(liveEvidence),
+        };
+      }
       return {
         ok: false,
-        error: 'late_result_recovery_required',
+        error: 'late_result_recovery_incomplete',
+        envelopeId: id,
+        state: recovered?.state ?? record.state,
+        reconciliationRequired: recovered?.reconciliationRequired === true,
+        liveEvidence: clone(liveEvidence),
+      };
+    }
+
+    if (normalizedOutcome === 'no_active_execution_confirmed'
+        && liveEvidence.toolActivityObserved === true) {
+      return {
+        ok: false,
+        error: 'external_effect_reconciliation_required',
         envelopeId: id,
         state: record.state,
+        reconciliationRequired: true,
         liveEvidence: clone(liveEvidence),
       };
     }
@@ -511,8 +613,8 @@ export class PaneAgentRuntime {
         caller: clone(evidence),
         live: clone(liveEvidence),
       },
-      cancellationOutcome: normalizedOutcome === 'cancelled_no_effect_confirmed'
-        ? 'cancelled_no_effect_confirmed'
+      cancellationOutcome: normalizedOutcome === 'cancelled_execution_inactive_confirmed'
+        ? 'cancelled_execution_inactive_confirmed'
         : record.cancellationOutcome ?? null,
     });
     const context = this.#missionContext(updated);
@@ -534,7 +636,7 @@ export class PaneAgentRuntime {
       now: reconciledAt,
     }));
 
-    if (normalizedOutcome === 'cancelled_no_effect_confirmed') {
+    if (normalizedOutcome === 'cancelled_execution_inactive_confirmed') {
       updated = this.#transitionMission(id, 'CANCELLED_BY_AUTHORITY', {
         authority: normalizedAuthority,
         outcome: normalizedOutcome,
@@ -662,6 +764,47 @@ export class PaneAgentRuntime {
     };
   }
 
+  async #recoverDeliveryAnchor(record) {
+    if (record?.delivery?.url && record?.delivery?.userMessageId) return record;
+    if (!record?.envelopeId || typeof this.surface.recoverMissionDelivery !== 'function') {
+      return null;
+    }
+    const recovered = await this.surface.recoverMissionDelivery(record.pane, {
+      envelopeId: record.envelopeId,
+      missionId: record.missionId,
+    });
+    if (!recovered?.ok || !recovered?.userMessageId || !recovered?.url) return null;
+
+    const updated = this.#storeMission({
+      ...this.state.missions[record.envelopeId],
+      delivery: {
+        userMessageId: recovered.userMessageId,
+        baselineAssistantMessageId: recovered.baselineAssistantMessageId ?? null,
+        url: recovered.url,
+      },
+      reconciliationRequired: true,
+      reconciliationReason: this.state.missions[record.envelopeId]?.reconciliationReason
+        ?? 'delivery_anchor_recovered_requires_reconciliation',
+    });
+    const context = this.#missionContext(updated);
+    this.#record(createAgentReceipt({
+      kind: 'MISSION_DELIVERY_ANCHOR_RECOVERED',
+      status: updated.state,
+      binding: context.binding,
+      session: context.session,
+      envelope: context.envelope,
+      evidence: {
+        pane: updated.pane,
+        executionId: updated.executionId,
+        userMessageId: recovered.userMessageId,
+        baselineAssistantMessageId: recovered.baselineAssistantMessageId ?? null,
+        url: recovered.url,
+      },
+      now: this.now(),
+    }));
+    return updated;
+  }
+
   async #recoverLateResultAfterStartTimeout({
     envelopeId,
     pane,
@@ -673,8 +816,8 @@ export class PaneAgentRuntime {
     userMessageId,
     baselineAssistantMessageId,
     acceptance,
+    recoveryReason = 'assistant_start_observation_timeout',
   }) {
-    const recoveryReason = 'assistant_start_observation_timeout';
     this.#storeMission({
       ...this.state.missions[envelopeId],
       reconciliationRequired: true,
@@ -1347,6 +1490,11 @@ export class PaneAgentRuntime {
     const panes = agentId ? [paneForAgent(agentId, this.agentBindings)] : [...PANES];
     const results = [];
     for (const pane of panes) {
+      const checkpoint = this.getRecoveryCheckpoint({ pane });
+      if (checkpoint.recoveryRequired || checkpoint.mutationAllowed === false) {
+        results.push({ ok: false, error: 'pane_recovery_required', pane, checkpoint });
+        continue;
+      }
       try {
         results.push(await this.#bootstrapPane(pane, canonicalAgents, Boolean(force)));
       } catch (error) {
@@ -1630,7 +1778,10 @@ export class PaneAgentRuntime {
 
         const delivery = await this.surface.sendMessage(pane, formatMissionEnvelope(envelope));
         const cancellationAfterDelivery = this.state.missions[envelope.envelopeId];
-        if (cancellationAfterDelivery?.cancellationRequested === true
+        if (delivery?.ok === true
+            && delivery?.userMessageId
+            && delivery?.url
+            && cancellationAfterDelivery?.cancellationRequested === true
             && cancellationAfterDelivery?.cancellationSignal?.deferred === true
             && typeof this.surface.cancelAssistantGeneration === 'function') {
           const cancellationSignal = await this.surface.cancelAssistantGeneration(pane, {
@@ -1659,6 +1810,33 @@ export class PaneAgentRuntime {
               deferredUntilDelivery: true,
               reconciliationRequired: true,
               url: delivery?.url ?? this.surface.getUrl(pane) ?? null,
+            },
+            now: this.now(),
+          }));
+        }
+
+        if (!delivery?.ok && delivery?.error === 'message_send_unconfirmed') {
+          this.#storeMission({
+            ...this.state.missions[envelope.envelopeId],
+            reconciliationRequired: true,
+            reconciliationReason: 'mission_delivery_outcome_unknown',
+          });
+          this.#transitionMission(envelope.envelopeId, 'INTERRUPTED', {
+            error: 'mission_delivery_outcome_unknown',
+            deliveryError: delivery.error,
+          });
+          return this.#record(createAgentReceipt({
+            kind: 'MISSION_DELIVERY_UNVERIFIED',
+            status: 'INTERRUPTED',
+            binding,
+            session,
+            envelope,
+            evidence: {
+              pane,
+              executionId,
+              error: delivery.error,
+              reconciliationRequired: true,
+              url: this.surface.getUrl(pane) ?? null,
             },
             now: this.now(),
           }));
@@ -2354,6 +2532,16 @@ export class PaneAgentRuntime {
           continue;
         }
 
+        const beforeRecoveredCompletion = this.state.missions[record.envelopeId];
+        this.#storeMission({
+          ...beforeRecoveredCompletion,
+          reconciliationRequired: false,
+          reconciliationReason: null,
+          recoveryResumeRequired: false,
+          cancellationOutcome: beforeRecoveredCompletion?.cancellationRequested
+            ? 'too_late_result_completed'
+            : beforeRecoveredCompletion?.cancellationOutcome ?? null,
+        });
         this.#transitionMission(record.envelopeId, 'COMPLETED', {
           recoveredAfterRestart: true,
           assistantMessageId: persisted.assistantMessageId,
@@ -2432,6 +2620,13 @@ export class PaneAgentRuntime {
         now: this.now(),
       }));
 
+      if (!context.userMessageId && !context.assistantMessageId) {
+        const recoveredAnchor = await this.#recoverDeliveryAnchor(
+          this.state.missions[record.envelopeId],
+        );
+        if (recoveredAnchor) context = this.#missionContext(recoveredAnchor);
+      }
+
       const interruptedFrom = record?.lastTransition?.evidence?.previousState ?? null;
       const legacyRecoverableWithoutAnchor = ['DELIVERED', 'ACCEPTED', 'WORKING']
         .includes(interruptedFrom);
@@ -2494,7 +2689,7 @@ export class PaneAgentRuntime {
         marker: context.marker,
         assistantMessageId: context.assistantMessageId,
         userMessageId: context.userMessageId,
-        expectedConversationUrl: record.delivery?.url ?? null,
+        expectedConversationUrl: this.state.missions[record.envelopeId]?.delivery?.url ?? null,
         envelope: context.envelope,
         executionId: record.executionId,
         session: context.session,
