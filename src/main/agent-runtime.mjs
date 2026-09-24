@@ -399,12 +399,16 @@ export class PaneAgentRuntime {
     const requestedParentMissionId = input?.parentMissionId == null
       ? null
       : String(input.parentMissionId);
+    let retryContext = null;
+
     if (requestedMissionId) {
-      const existing = Object.values(this.state.missions ?? {}).find(record =>
+      const attempts = Object.values(this.state.missions ?? {}).filter(record =>
         record?.missionId === requestedMissionId
         && record?.agentId === manifest.agentId
         && (record?.parentMissionId ?? null) === requestedParentMissionId
       );
+      const existing = attempts.at(-1) ?? null;
+
       if (existing) {
         const requestedIntent = missionIntent(input, manifest.agentId);
         const existingIntent = missionIntent(existing.envelope, manifest.agentId);
@@ -421,31 +425,57 @@ export class PaneAgentRuntime {
           };
         }
 
-        const queuedReceipt = [...(this.state.receipts ?? [])].reverse().find(receipt =>
-          receipt?.kind === 'MISSION_QUEUED'
-          && receipt?.envelope?.envelopeId === existing.envelopeId
+        const terminalStates = new Set([
+          'COMPLETED',
+          'FAILED',
+          'UNVERIFIED',
+          'REJECTED',
+          'INTERRUPTED',
+          'CANCELLED_BY_AUTHORITY',
+        ]);
+        const retryableStates = new Set(['FAILED', 'UNVERIFIED', 'INTERRUPTED']);
+        const completedAttempt = attempts.find(record => record.state === 'COMPLETED') ?? null;
+        const activeAttempt = [...attempts].reverse().find(record =>
+          !terminalStates.has(record.state)
         ) ?? null;
-        const acceptanceReceipt = [...(this.state.receipts ?? [])].reverse().find(receipt =>
-          receipt?.kind === 'MISSION_ACCEPTED'
-          && receipt?.envelope?.envelopeId === existing.envelopeId
-        ) ?? null;
-        return {
-          ok: true,
-          deduplicated: true,
-          queued: existing.state === 'QUEUED',
-          delivered: existing.state === 'QUEUED' ? null : true,
-          accepted: ['ACCEPTED', 'WORKING', 'RESULT_CAPTURED', 'COMPLETED'].includes(existing.state)
-            ? true
-            : null,
-          deliveryPending: existing.state === 'QUEUED',
-          acceptancePending: ['QUEUED', 'DELIVERED'].includes(existing.state),
-          acceptanceMarker: existing.acceptanceMarker ?? null,
-          state: existing.state,
-          executionId: existing.executionId,
-          envelope: clone(existing.envelope),
-          receipt: clone(queuedReceipt),
-          acceptanceReceipt: clone(acceptanceReceipt),
-        };
+        const retryRequested = input?.retryFailed === true;
+
+        if (retryRequested
+            && !completedAttempt
+            && !activeAttempt
+            && retryableStates.has(existing.state)) {
+          retryContext = {
+            retryOfEnvelopeId: existing.envelopeId,
+            attemptNumber: attempts.length + 1,
+          };
+        } else {
+          const target = completedAttempt ?? activeAttempt ?? existing;
+          const queuedReceipt = [...(this.state.receipts ?? [])].reverse().find(receipt =>
+            receipt?.kind === 'MISSION_QUEUED'
+            && receipt?.envelope?.envelopeId === target.envelopeId
+          ) ?? null;
+          const acceptanceReceipt = [...(this.state.receipts ?? [])].reverse().find(receipt =>
+            receipt?.kind === 'MISSION_ACCEPTED'
+            && receipt?.envelope?.envelopeId === target.envelopeId
+          ) ?? null;
+          return {
+            ok: true,
+            deduplicated: true,
+            queued: target.state === 'QUEUED',
+            delivered: target.state === 'QUEUED' ? null : true,
+            accepted: ['ACCEPTED', 'WORKING', 'RESULT_CAPTURED', 'COMPLETED'].includes(target.state)
+              ? true
+              : null,
+            deliveryPending: target.state === 'QUEUED',
+            acceptancePending: ['QUEUED', 'DELIVERED'].includes(target.state),
+            acceptanceMarker: target.acceptanceMarker ?? null,
+            state: target.state,
+            executionId: target.executionId,
+            envelope: clone(target.envelope),
+            receipt: clone(queuedReceipt),
+            acceptanceReceipt: clone(acceptanceReceipt),
+          };
+        }
       }
     }
 
@@ -486,6 +516,8 @@ export class PaneAgentRuntime {
       contractDigest: current.contractDigest,
       envelopeDigest,
       envelope,
+      attemptNumber: retryContext?.attemptNumber ?? 1,
+      retryOfEnvelopeId: retryContext?.retryOfEnvelopeId ?? null,
       acceptanceMarker: 'MCF_MISSION_ACCEPTED envelope_id=' + envelope.envelopeId
         + ' agent_id=' + manifest.agentId,
       state: 'QUEUED',
@@ -506,6 +538,8 @@ export class PaneAgentRuntime {
         pane,
         executionId,
         envelopeDigest,
+        attemptNumber: retryContext?.attemptNumber ?? 1,
+        retryOfEnvelopeId: retryContext?.retryOfEnvelopeId ?? null,
         url: this.surface.getUrl(pane) ?? null,
       },
       now: this.now(),
@@ -791,32 +825,6 @@ export class PaneAgentRuntime {
           }));
         }
 
-        if (result?.interrupted || result?.terminalSignal === 'assistant_interrupted') {
-          this.#transitionMission(envelope.envelopeId, 'INTERRUPTED', {
-            assistantMessageId: acceptedAssistantMessageId,
-            userMessageId,
-            terminalSignal: result?.terminalSignal ?? 'assistant_interrupted',
-            interruptionText: result?.interruptionText ?? null,
-          });
-          return this.#record(createAgentReceipt({
-            kind: 'MISSION_INTERRUPTED',
-            status: 'INTERRUPTED',
-            binding,
-            session,
-            envelope,
-            evidence: {
-              pane,
-              executionId,
-              assistantMessageId: acceptedAssistantMessageId,
-              userMessageId,
-              terminalSignal: result?.terminalSignal ?? 'assistant_interrupted',
-              interruptionText: result?.interruptionText ?? null,
-              url: result?.url ?? this.surface.getUrl(pane) ?? null,
-            },
-            now: this.now(),
-          }));
-        }
-
         const missionBeforeCapture = this.state.missions[envelope.envelopeId];
         const acceptedBeforeCapture = missionBeforeCapture?.acceptedAssistantMessageId ?? null;
         const resultAssistantMessageId = result?.assistantMessageId ?? null;
@@ -967,6 +975,9 @@ export class PaneAgentRuntime {
 
     return {
       ok: true,
+      retried: Boolean(retryContext),
+      retryOfEnvelopeId: retryContext?.retryOfEnvelopeId ?? null,
+      attemptNumber: retryContext?.attemptNumber ?? 1,
       queued: true,
       delivered: null,
       accepted: null,

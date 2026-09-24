@@ -119,3 +119,65 @@ Exemplos:
     {"pane":"workspace","selector":"textarea","text":"texto"}
 
 A rota `/v1/pointer` também é multipainel, mas ações semânticas/programáticas continuam preferidas quando disponíveis.
+
+
+## Agent lifecycle verificável
+
+A Bridge expõe o ciclo de vida das missões dos agentes e não trata aceite como conclusão.
+
+Fluxo esperado:
+
+    QUEUED -> DELIVERED -> ACCEPTED -> WORKING -> RESULT_CAPTURED -> COMPLETED
+
+Estados de falha/interrupção (`FAILED`, `UNVERIFIED`, `INTERRUPTED`) permanecem bloqueantes para o closeout até existir uma tentativa válida concluída ou resolução explicitamente autorizada.
+
+Rotas principais:
+
+    POST /v1/mission-envelope
+    GET  /v1/missions
+    GET  /v1/mission-status?envelopeId=<id>
+    GET  /v1/mission-result?envelopeId=<id>
+    GET  /v1/parent-mission-status?missionId=<parentMissionId>
+
+Exemplo de missão:
+
+    POST /v1/mission-envelope
+    {
+      "agentId": "Sofia",
+      "missionId": "MISSION-ARCH-1",
+      "parentMissionId": "MISSION-PARENT-1",
+      "required": true,
+      "objective": "Validar a arquitetura."
+    }
+
+### Retry explícito de tentativa terminal
+
+Chamadas normais continuam idempotentes: repetir a mesma missão lógica (`missionId` + agente + parent + mesmo intent) retorna a execução existente e não envia novamente.
+
+Para refazer uma missão cujo último attempt terminou em `FAILED`, `UNVERIFIED` ou `INTERRUPTED`, use explicitamente:
+
+    {
+      "agentId": "Sofia",
+      "missionId": "MISSION-ARCH-1",
+      "parentMissionId": "MISSION-PARENT-1",
+      "objective": "Validar a arquitetura.",
+      "retryFailed": true
+    }
+
+O retry só cria nova execução quando não existe attempt ativo nem `COMPLETED`. A nova execução recebe novo `envelopeId` e `executionId`, registra `attemptNumber` e `retryOfEnvelopeId`, e continua pertencendo ao mesmo `missionId` lógico.
+
+`parentMissionStatus` agrupa attempts pelo `missionId` lógico. Portanto, um retry aumenta `attempts`, mas não aumenta `required`.
+
+### Critério terminal e evidência visual
+
+`RESULT_CAPTURED` exige identidade de mensagem final, vínculo com o turno entregue, SHA-256, persistência/read-back e prova terminal positiva. Para o sinal UI, o runtime exige geração inativa, ações finais observadas e estabilidade mínima.
+
+Marcadores transitórios como `request-placeholder-*`, `Pensando`/`Thinking` e estados visíveis de interrupção não são resultados terminais.
+
+Em validações operacionais de lifecycle, o MESTRE deve cruzar:
+
+    estado interno / receipts
+    + DOM / WebContents
+    + screenshot da interface visível
+
+Uma divergência entre essas camadas bloqueia o closeout até ser explicada ou corrigida.
