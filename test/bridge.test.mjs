@@ -160,7 +160,7 @@ test('message API targets chat and workspace without system input and broadcasts
   const single = await request('/v1/message', { pane: 'chat', message: 'olá emilly' });
   assert.equal(single.status, 200);
   assert.deepEqual(inserted.chat, ['olá emilly']);
-  assert.ok(scripts.chat[0].includes('const enforceChatMode = true'));
+  assert.ok(scripts.chat.some(script => script.includes('const enforceChatMode = true')));
 
   entrants = 0;
   let releaseBroadcast;
@@ -193,10 +193,222 @@ test('message API targets chat and workspace without system input and broadcasts
   assert.equal((await request('/v1/message', { pane: 'chat', message: '' })).status, 400);
 
   const beforeBlocked = inserted.chat.length;
-  panes.chat.executeJavaScript = async () => ({ ok: false, error: 'rate_limit_hard_block' });
+  panes.chat.executeJavaScript = async script => {
+    if (script.includes('MCF_MESSAGE_COMPOSER_READINESS')) {
+      return {
+        ok: true,
+        composerPresent: true,
+        composerEditable: true,
+        generationActive: false,
+      };
+    }
+    if (script.includes('const enforceChatMode')) {
+      return { ok: false, error: 'rate_limit_hard_block' };
+    }
+    return { ok: true };
+  };
   const blocked = await request('/v1/message', { pane: 'chat', message: 'não deve inserir' });
   assert.equal(blocked.status, 429);
   assert.equal(inserted.chat.length, beforeBlocked);
+});
+
+test('message transport waits for active generation before touching the composer', async () => {
+  let readinessCalls = 0;
+  let insertCalls = 0;
+  let submitCalls = 0;
+  const wc = {
+    isDestroyed: () => false,
+    getURL: () => 'https://chatgpt.com/c/active-generation',
+    getTitle: () => 'chat',
+    executeJavaScript: async script => {
+      if (script.includes('MCF_MESSAGE_COMPOSER_READINESS')) {
+        readinessCalls += 1;
+        if (readinessCalls === 1) {
+          return {
+            ok: false,
+            composerPresent: true,
+            composerEditable: true,
+            generationActive: true,
+            stopControl: { testId: 'stop-button' },
+          };
+        }
+        return {
+          ok: true,
+          composerPresent: true,
+          composerEditable: true,
+          generationActive: false,
+          stopControl: null,
+        };
+      }
+      if (script.includes('const enforceChatMode')) {
+        return {
+          ok: true,
+          baseline: {
+            url: 'https://chatgpt.com/c/active-generation',
+            userMessageCount: 1,
+            lastUserMessageId: 'user-old',
+            lastAssistantMessageId: 'assistant-handshake',
+          },
+        };
+      }
+      if (script.includes('MCF_MESSAGE_INSERT_VERIFICATION')) {
+        return {
+          ok: true,
+          composerPresent: true,
+          actualLength: 15,
+          expectedLength: 15,
+        };
+      }
+      if (script.includes('chat_send_control_not_found')) {
+        submitCalls += 1;
+        return { ok: true, method: 'button' };
+      }
+      if (script.includes('conversationAdvanced')) {
+        return {
+          ok: true,
+          composerCleared: true,
+          conversationAdvanced: true,
+          sent: true,
+          url: 'https://chatgpt.com/c/active-generation',
+          userMessageCount: 2,
+          lastUserMessageId: 'user-new',
+          lastAssistantMessageId: 'assistant-handshake',
+          baselineLastAssistantMessageId: 'assistant-handshake',
+        };
+      }
+      if (script.includes('const expected =')) {
+        return {
+          ok: true,
+          composerEmpty: true,
+          composerTextLength: 0,
+          automationResidual: false,
+        };
+      }
+      return { ok: true };
+    },
+    insertText: async () => {
+      assert.equal(readinessCalls, 2);
+      insertCalls += 1;
+    },
+  };
+
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    getPaneWebContents: () => wc,
+    captureDir: os.tmpdir(),
+    instanceId: 'test',
+    messageComposerReadyTimeoutMs: 50,
+    messageComposerReadyPollMs: 1,
+  });
+
+  const result = await bridge.sendMessage('chat', 'mission payload');
+  assert.equal(result.ok, true);
+  assert.equal(readinessCalls, 2);
+  assert.equal(insertCalls, 1);
+  assert.equal(submitCalls, 1);
+});
+
+test('message transport fails closed when generation never becomes idle', async () => {
+  let insertCalls = 0;
+  let nonReadinessScripts = 0;
+  const wc = {
+    isDestroyed: () => false,
+    getURL: () => 'https://chatgpt.com/c/still-active',
+    getTitle: () => 'chat',
+    executeJavaScript: async script => {
+      if (script.includes('MCF_MESSAGE_COMPOSER_READINESS')) {
+        return {
+          ok: false,
+          composerPresent: true,
+          composerEditable: true,
+          generationActive: true,
+          stopControl: {
+            ariaLabel: 'Parar de responder',
+            testId: 'stop-button',
+          },
+        };
+      }
+      nonReadinessScripts += 1;
+      return { ok: true };
+    },
+    insertText: async () => { insertCalls += 1; },
+  };
+
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    getPaneWebContents: () => wc,
+    captureDir: os.tmpdir(),
+    instanceId: 'test',
+    messageComposerReadyTimeoutMs: 5,
+    messageComposerReadyPollMs: 1,
+  });
+
+  const result = await bridge.sendMessage('chat', 'must not be typed');
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'message_send_blocked_generation_active');
+  assert.equal(result.readiness?.generationActive, true);
+  assert.equal(insertCalls, 0);
+  assert.equal(nonReadinessScripts, 0);
+});
+
+test('message transport does not submit when native insertion is not observed', async () => {
+  let insertCalls = 0;
+  let submitCalls = 0;
+  const wc = {
+    isDestroyed: () => false,
+    getURL: () => 'https://chatgpt.com/c/insert-missing',
+    getTitle: () => 'chat',
+    executeJavaScript: async script => {
+      if (script.includes('MCF_MESSAGE_COMPOSER_READINESS')) {
+        return {
+          ok: true,
+          composerPresent: true,
+          composerEditable: true,
+          generationActive: false,
+        };
+      }
+      if (script.includes('const enforceChatMode')) {
+        return {
+          ok: true,
+          baseline: {
+            url: 'https://chatgpt.com/c/insert-missing',
+            userMessageCount: 1,
+            lastUserMessageId: 'user-old',
+            lastAssistantMessageId: 'assistant-old',
+          },
+        };
+      }
+      if (script.includes('MCF_MESSAGE_INSERT_VERIFICATION')) {
+        return {
+          ok: false,
+          composerPresent: true,
+          actualLength: 0,
+          expectedLength: 18,
+        };
+      }
+      if (script.includes('chat_send_control_not_found')) {
+        submitCalls += 1;
+        return { ok: true, method: 'button' };
+      }
+      return { ok: true };
+    },
+    insertText: async () => { insertCalls += 1; },
+  };
+
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    getPaneWebContents: () => wc,
+    captureDir: os.tmpdir(),
+    instanceId: 'test',
+    messageComposerReadyTimeoutMs: 20,
+    messageComposerReadyPollMs: 1,
+  });
+
+  const result = await bridge.sendMessage('chat', 'insertion vanished');
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'message_native_insert_not_observed');
+  assert.equal(insertCalls, 1);
+  assert.equal(submitCalls, 0);
 });
 
 
