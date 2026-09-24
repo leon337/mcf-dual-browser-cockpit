@@ -3,25 +3,24 @@ phase_id: PHASE-01-LIVE-AGENT-COMMS
 class: C
 authority: LEANDRO
 orchestrator: MESTRE
-state: DOCUMENTATION_REMEDIATED_AWAITING_R4
-baseline_sha: 6fcc47c4b64f6f5d8b93f09b96d8f98947c9fdb8
+state: MERGE_READY
 version: 0.6.0
 release_code_sha: c11e3984fc76a19780593d35eaabc7f903193322
 appimage_sha256: ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951
-executable_ci: Checks_77_SUCCESS
-validation: 55_of_55_PASS
+release_ci: Checks_77_SUCCESS
 production: EXACT_ARTIFACT_ACTIVE
 smoke: FOUR_OF_FOUR_COMPLETED
 replay_disconnect_reconnect: PASS_15_EVENTS
 audit_r1: FAIL_DOCUMENTATION_ONLY
-audit_r2: PASS_SUPERSEDED_BY_ARTIFACT_PROMOTION
-audit_r3_4d51: PASS_SUPERSEDED_BY_NEWER_CLOSEOUT
-audit_r3_5e33: FAIL_DOCUMENTATION_ONLY_PRF_CLOSEOUT_0_6_0_002
-remediation:
-  - pr_metadata_to_current_head_and_ci
-  - visual_hashes_text_matches_versioned_pngs
-  - r2_json_restored_and_manifest_regenerated
-next_gate: EMILY_SHORT_CONSISTENCY_R4
+audit_r2: PASS_SUPERSEDED
+audit_r3_5e33: FAIL_DOCUMENTATION_ONLY
+audit_r4:
+  decision: PASS
+  result_sha256: c39bff6b6f637d639c4ac62b9c45785aced0928fac831e632fa6d80df1970663
+  critical: 0
+  high: 0
+  merge_release_gate: LIBERADO_TECNICAMENTE
+next_gate: FINAL_SEAL_CI_THEN_MERGE_PR_8
 authorization: FINALIZE_AND_PRODUCTION_AUTHORIZED_BY_LEANDRO
 prohibitions:
   - do_not_merge_pr_6_without_separate_leandro_decision
