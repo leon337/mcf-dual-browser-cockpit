@@ -1750,7 +1750,9 @@ test('runtime blocks mission dispatch until startup recovery is explicitly compl
     startupReady: false,
   });
 
-  await runtime.bootstrap();
+  const blockedBootstrap = await runtime.bootstrap();
+  assert.equal(blockedBootstrap.ok, false);
+  assert.equal(blockedBootstrap.error, 'agent_runtime_initializing');
 
   const blocked = await runtime.dispatchMission({
     agentId: 'Sofia',
@@ -1762,7 +1764,10 @@ test('runtime blocks mission dispatch until startup recovery is explicitly compl
   assert.equal(blocked.error, 'agent_runtime_initializing');
   assert.equal(runtime.listMissions().length, 0);
 
-  runtime.markStartupReady();
+  const startup = await runtime.initializeStartup();
+  assert.equal(startup.ok, true);
+  assert.equal(startup.startupReady, true);
+  assert.equal(runtime.isStartupReady(), true);
 
   const accepted = await runtime.dispatchMission({
     agentId: 'Sofia',

@@ -314,3 +314,152 @@ test('backend-quality rejects copied runtime state from another instance or prof
     loadState: () => ({ ...structuredClone(baseState), missionId: 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003' }),
   }), /agent_runtime_profile_mismatch/);
 });
+
+
+test('backend-quality startup recovers before rebootstrap and keeps operational APIs gated until revalidation finishes', async () => {
+  const order = [];
+  let createCalls = 0;
+  let sendCalls = 0;
+  let showCalls = 0;
+  let releaseRecovery;
+  const recoveryGate = new Promise(resolve => { releaseRecovery = resolve; });
+  let state = {
+    schema: 'mcf-pane-agent-runtime/v1',
+    version: 2,
+    instanceId: 'notebook-team3',
+    missionId,
+    bindings: {
+      chat: {
+        pane: 'chat',
+        agentId: 'Renato',
+        role: 'Qualidade e Testes',
+        contractRef: 'docs/agentes/RENATO.md',
+        contractDigest: '1'.repeat(64),
+        sessionId: 'stale-renato',
+        traceId: 'stale-trace-renato',
+        state: 'READY',
+        handshakeVerified: true,
+        chatUrl: 'https://chatgpt.test/g/renato/stale',
+      },
+      workspace: {
+        pane: 'workspace',
+        agentId: 'Eduardo',
+        role: 'Engenharia Backend',
+        contractRef: 'docs/agentes/EDUARDO.md',
+        contractDigest: '2'.repeat(64),
+        sessionId: 'stale-eduardo',
+        traceId: 'stale-trace-eduardo',
+        state: 'READY',
+        handshakeVerified: true,
+        chatUrl: 'https://chatgpt.test/g/eduardo/stale',
+      },
+    },
+    missions: {},
+    receipts: [],
+  };
+  const broker = {
+    listAgents: async () => {
+      order.push('registry');
+      return canonical;
+    },
+    showSession: async () => {
+      showCalls += 1;
+      throw new Error('persisted READY must not be reused during startup');
+    },
+    createSession: async ({ agentId }) => {
+      createCalls += 1;
+      order.push('create-' + agentId);
+      return {
+        ...sessionFor(agentId),
+        sessionId: 'revalidated-' + agentId.toLowerCase(),
+      };
+    },
+    markOpen: async sessionId => {
+      order.push('open-' + sessionId);
+      return { ok: true };
+    },
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/current',
+    freshConversation: async pane => {
+      order.push('fresh-' + pane);
+    },
+    sendMessage: async (pane) => {
+      sendCalls += 1;
+      order.push('send-' + pane);
+      return {
+        ok: true,
+        pane,
+        method: 'button',
+        url: 'https://chatgpt.test/' + pane + '/current',
+      };
+    },
+    waitForAssistantMarker: async pane => {
+      order.push('ready-' + pane);
+      return true;
+    },
+  };
+
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook-team3',
+    missionId,
+    broker,
+    surface,
+    agentBindings: bindings,
+    loadState: () => structuredClone(state),
+    saveState: next => { state = structuredClone(next); },
+    startupReady: false,
+  });
+
+  const before = runtime.getIdentities();
+  assert.equal(runtime.isStartupReady(), false);
+  assert.equal(before.find(item => item.pane === 'chat').state, 'STALE');
+  assert.equal(before.find(item => item.pane === 'workspace').state, 'STALE');
+  assert.equal(before.every(item => item.handshakeVerified === false), true);
+
+  runtime.recoverPersistedMissions = async () => {
+    order.push('recovery-start');
+    await recoveryGate;
+    order.push('recovery-end');
+    return { ok: true, recovered: [] };
+  };
+
+  const startupPromise = runtime.initializeStartup();
+  await new Promise(resolve => setImmediate(resolve));
+
+  const blockedBootstrap = await runtime.bootstrap();
+  assert.equal(blockedBootstrap.ok, false);
+  assert.equal(blockedBootstrap.error, 'agent_runtime_initializing');
+
+  const blockedMission = await runtime.dispatchMission({
+    agentId: 'Eduardo',
+    missionId: 'TEAM3-BLOCKED-DURING-RECOVERY',
+    objective: 'Não pode enviar durante recovery.',
+  });
+  assert.equal(blockedMission.ok, false);
+  assert.equal(blockedMission.error, 'agent_runtime_initializing');
+  assert.deepEqual(order, ['recovery-start']);
+  assert.equal(createCalls, 0);
+  assert.equal(sendCalls, 0);
+
+  releaseRecovery();
+  const startup = await startupPromise;
+
+  assert.equal(startup.ok, true);
+  assert.equal(startup.startupReady, true);
+  assert.equal(runtime.isStartupReady(), true);
+  assert.equal(order[0], 'recovery-start');
+  assert.equal(order[1], 'recovery-end');
+  assert.equal(order[2], 'registry');
+  assert.equal(createCalls, 2);
+  assert.equal(showCalls, 0);
+  assert.equal(sendCalls, 2);
+
+  const after = runtime.getIdentities();
+  assert.equal(after.find(item => item.pane === 'chat').sessionId, 'revalidated-renato');
+  assert.equal(after.find(item => item.pane === 'workspace').sessionId, 'revalidated-eduardo');
+  assert.equal(after.every(item => item.state === 'READY'), true);
+  assert.equal(after.every(item => item.handshakeVerified === true), true);
+  assert.equal(state.bindings.chat.contractDigest, '1'.repeat(64));
+  assert.equal(state.bindings.workspace.contractDigest, '2'.repeat(64));
+});

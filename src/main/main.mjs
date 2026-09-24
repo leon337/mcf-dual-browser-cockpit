@@ -1766,10 +1766,25 @@ function createWindow() {
     .then(async (state) => {
       persistBridgeState(state);
       await sleep(1200);
-      const bootstrap = await paneAgentRuntime?.bootstrap().catch((error) => ({
+      const startup = await paneAgentRuntime?.initializeStartup().catch((error) => ({
         ok: false,
-        error: error.message,
+        error: 'startup_initialization_failed',
+        detail: error.message,
+        startupReady: false,
       }));
+      const recovery = startup?.recovery;
+      if (recovery?.recovered?.length) {
+        const completed = recovery.recovered.filter(item => item.state === 'COMPLETED').length;
+        const unresolved = recovery.recovered.length - completed;
+        emitBridgeEvent({
+          level: unresolved ? 'error' : 'ok',
+          message: 'MCF Mission Recovery: '
+            + completed + ' concluída(s), '
+            + unresolved + ' não verificada(s).',
+        });
+      }
+
+      const bootstrap = startup?.bootstrap;
       if (bootstrap?.ok) {
         emitBridgeEvent({
           level: 'ok',
@@ -1780,32 +1795,22 @@ function createWindow() {
       } else {
         emitBridgeEvent({
           level: 'error',
-          message: 'MCF Agent Identity: bootstrap incompleto — ' + (bootstrap?.error || 'verificar /v1/agents'),
+          message: 'MCF Agent Identity: bootstrap/revalidação incompleto — '
+            + (bootstrap?.error || startup?.error || 'verificar /v1/agents'),
         });
       }
 
-      try {
-        const recovery = await paneAgentRuntime?.recoverPersistedMissions();
-        if (recovery?.recovered?.length) {
-          const completed = recovery.recovered.filter(item => item.state === 'COMPLETED').length;
-          const unresolved = recovery.recovered.length - completed;
-          emitBridgeEvent({
-            level: unresolved ? 'error' : 'ok',
-            message: 'MCF Mission Recovery: '
-              + completed + ' concluída(s), '
-              + unresolved + ' não verificada(s).',
-          });
-        }
-        paneAgentRuntime?.markStartupReady();
+      if (startup?.ok) {
         emitBridgeEvent({
           level: 'ok',
-          message: 'MCF Agent Runtime: startup/recovery concluído — missões liberadas.',
+          message: 'MCF Agent Runtime: recovery + revalidação concluídos — missões liberadas.',
         });
-      } catch (error) {
+      } else {
         paneAgentRuntime?.markStartupInitializing();
         emitBridgeEvent({
           level: 'error',
-          message: 'MCF Mission Recovery falhou: ' + error.message,
+          message: 'MCF Agent Runtime permanece bloqueado: '
+            + (startup?.detail || startup?.error || 'startup incompleto'),
         });
       }
     })

@@ -177,7 +177,25 @@ export class PaneAgentRuntime {
           receipts: Array.isArray(loaded.receipts) ? loaded.receipts.slice(-RECEIPT_LIMIT) : [],
         }
       : initialState(instanceId, missionId);
+    if (!this.startupReady) this.#markPersistedBindingsStale();
     this.#markRestartInterruptions();
+  }
+
+  #markPersistedBindingsStale() {
+    let changed = false;
+    for (const pane of PANES) {
+      const current = this.state.bindings?.[pane];
+      if (current?.state !== 'READY' && current?.handshakeVerified !== true) continue;
+      this.state.bindings[pane] = {
+        ...current,
+        state: 'STALE',
+        handshakeVerified: false,
+        lastError: 'identity_revalidation_required',
+        updatedAt: this.now(),
+      };
+      changed = true;
+    }
+    if (changed) this.#persist();
   }
 
   #markRestartInterruptions() {
@@ -1129,7 +1147,7 @@ export class PaneAgentRuntime {
     return { ok: true, reused, identity: clone(record), receipt };
   }
 
-  async bootstrap({ agentId = null, force = false } = {}) {
+  async #bootstrapIdentities({ agentId = null, force = false } = {}) {
     const registry = await this.broker.listAgents();
     const canonicalAgents = Array.isArray(registry) ? registry : registry?.agents;
     if (!Array.isArray(canonicalAgents)) throw new Error('canonical_agent_registry_unavailable');
@@ -1160,6 +1178,52 @@ export class PaneAgentRuntime {
     return {
       ok: results.every(result => result.ok),
       agents: results,
+    };
+  }
+
+  async bootstrap({ agentId = null, force = false } = {}) {
+    if (!this.startupReady) {
+      return {
+        ok: false,
+        error: 'agent_runtime_initializing',
+      };
+    }
+    return this.#bootstrapIdentities({ agentId, force });
+  }
+
+  async initializeStartup() {
+    this.markStartupInitializing();
+
+    let recovery;
+    try {
+      recovery = await this.recoverPersistedMissions();
+    } catch (error) {
+      return {
+        ok: false,
+        error: 'startup_recovery_failed',
+        detail: error.message,
+        startupReady: false,
+      };
+    }
+
+    const bootstrap = await this.#bootstrapIdentities({ force: true });
+    if (!bootstrap.ok) {
+      this.markStartupInitializing();
+      return {
+        ok: false,
+        error: 'startup_identity_rebootstrap_failed',
+        recovery,
+        bootstrap,
+        startupReady: false,
+      };
+    }
+
+    this.markStartupReady();
+    return {
+      ok: true,
+      recovery,
+      bootstrap,
+      startupReady: true,
     };
   }
 
