@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   AGENT_IDENTITY_SCHEMA,
   agentBindingForPane,
+  agentBindingsForProfile,
+  paneForAgent,
   validateCanonicalAgent,
   buildIdentityBootstrap,
   detectReadyHandshake,
@@ -196,4 +198,26 @@ test('mission envelope requires the exact acceptance marker as the first assista
     /MCF_MISSION_ACCEPTED envelope_id=env-accept agent_id=Emily/,
   );
   assert.match(formatted, /Do not paraphrase, translate, prefix, suffix, or omit this marker/);
+});
+
+
+test('agent profiles preserve default bindings and expose Patrícia/Rafael as an isolated pair', () => {
+  const current = agentBindingsForProfile('audit-architecture');
+  const expansion = agentBindingsForProfile('debug-engineering');
+
+  assert.equal(current.chat.agentId, 'Emily');
+  assert.equal(current.workspace.agentId, 'Sofia');
+
+  assert.equal(expansion.chat.agentId, 'Patrícia');
+  assert.equal(expansion.chat.role, 'Debugging e Análise de Falhas');
+  assert.equal(expansion.chat.contractRef, 'docs/agentes/PATRICIA.md');
+  assert.equal(expansion.workspace.agentId, 'Rafael');
+  assert.equal(expansion.workspace.role, 'Engenharia de Software');
+  assert.equal(expansion.workspace.contractRef, 'docs/agentes/RAFAEL.md');
+
+  assert.equal(paneForAgent('Patrícia', expansion), 'chat');
+  assert.equal(paneForAgent('Patricia', expansion), 'chat');
+  assert.equal(paneForAgent('Rafael', expansion), 'workspace');
+  assert.throws(() => paneForAgent('Emily', expansion), /unknown_canonical_agent/);
+  assert.throws(() => agentBindingsForProfile('unknown'), /unknown_agent_profile/);
 });

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PaneAgentRuntime } from '../src/main/agent-runtime.mjs';
+import { agentBindingsForProfile } from '../src/main/agent-identity.mjs';
 
 const canonical = [
   {
@@ -14,6 +15,18 @@ const canonical = [
     role: 'Arquitetura de Software',
     contractRef: 'docs/agentes/SOFIA.md',
     contractDigest: '06ffc53d7466471b1541070990b02acde1a7350a63cb41b1b299f3ef0f28b6f3',
+  },
+  {
+    agentId: 'Patrícia',
+    role: 'Debugging e Análise de Falhas',
+    contractRef: 'docs/agentes/PATRICIA.md',
+    contractDigest: '88b4e68150f1cf732e52cc619388fc17dda37126009cedf533f1a4eefae8c89a',
+  },
+  {
+    agentId: 'Rafael',
+    role: 'Engenharia de Software',
+    contractRef: 'docs/agentes/RAFAEL.md',
+    contractDigest: '9404c3a2e35d8e5c30b6d2ecbc329b879b5eab99cab34408e09386df4f7d5fa9',
   },
 ];
 
@@ -1717,4 +1730,82 @@ test('runtime keeps delayed assistant start non-terminal while generation remain
   assert.ok(kinds.includes('MISSION_ACCEPTED'));
   assert.ok(kinds.includes('MISSION_COMPLETED'));
   assert.equal(kinds.includes('MISSION_ACCEPTANCE_UNVERIFIED'), false);
+});
+
+
+test('runtime bootstraps Patrícia and Rafael with profile-specific immutable pane bindings', async () => {
+  const sent = [];
+  let persisted = null;
+  const bindings = agentBindingsForProfile('debug-engineering');
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('patrícia') ? 'Patrícia' : 'Rafael'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane,
+    freshConversation: async () => {},
+    sendMessage: async (pane, message) => {
+      sent.push({ pane, message });
+      return { ok: true, pane, method: 'button', url: 'https://chatgpt.test/' + pane + '/c/new' };
+    },
+    waitForAssistantMarker: async () => true,
+  };
+
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook-team2',
+    missionId: 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003',
+    broker,
+    surface,
+    agentBindings: bindings,
+    loadState: () => null,
+    saveState: state => { persisted = structuredClone(state); },
+  });
+
+  const result = await runtime.bootstrap();
+  assert.equal(result.ok, true);
+  assert.ok(sent.find(x => x.pane === 'chat').message.includes('agent_id: Patrícia'));
+  assert.ok(sent.find(x => x.pane === 'workspace').message.includes('agent_id: Rafael'));
+
+  const identities = runtime.getIdentities();
+  assert.equal(identities.find(x => x.pane === 'chat').agentId, 'Patrícia');
+  assert.equal(identities.find(x => x.pane === 'workspace').agentId, 'Rafael');
+  assert.equal(persisted.bindings.chat.agentId, 'Patrícia');
+  assert.equal(persisted.bindings.workspace.agentId, 'Rafael');
+
+  const mission = await runtime.dispatchMission({
+    agentId: 'Patrícia',
+    missionId: 'DEBUG-1',
+    objective: 'Reproduzir falha sem implementar correção.',
+  });
+  assert.equal(mission.ok, true);
+  assert.equal(mission.envelope.agent.pane, 'chat');
+  assert.equal(mission.envelope.agent.agentId, 'Patrícia');
+  await runtime.waitForPendingMissions();
+});
+
+test('runtime fails closed when persisted bindings belong to another agent profile', () => {
+  const state = {
+    schema: 'mcf-pane-agent-runtime/v1',
+    version: 2,
+    instanceId: 'notebook-team2',
+    missionId: 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003',
+    bindings: {
+      chat: { agentId: 'Emily' },
+      workspace: { agentId: 'Sofia' },
+    },
+    missions: {},
+    receipts: [],
+  };
+
+  assert.throws(() => new PaneAgentRuntime({
+    instanceId: 'notebook-team2',
+    missionId: 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003',
+    broker: { listAgents: async () => canonical },
+    surface: {},
+    agentBindings: agentBindingsForProfile('debug-engineering'),
+    loadState: () => state,
+    saveState: () => {},
+  }), /agent_binding_profile_mismatch/);
 });

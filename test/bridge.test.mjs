@@ -12,9 +12,12 @@ test('profiles reject traversal and isolate atomic state', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-test-'));
   try {
     const a = instanceConfig(['--instance=notebook'], dir);
-    const b = instanceConfig(['--instance=monitor'], dir);
+    const b = instanceConfig(['--instance=monitor', '--agent-profile=debug-engineering'], dir);
     assert.notEqual(a.userData, b.userData);
+    assert.equal(a.agentProfile, 'audit-architecture');
+    assert.equal(b.agentProfile, 'debug-engineering');
     assert.throws(() => instanceConfig(['--instance=../escape'], dir));
+    assert.throws(() => instanceConfig(['--instance=x', '--agent-profile=../escape'], dir));
     for (const c of [a,b]) atomicJson(path.join(c.userData, 'state.json'), { id: c.id });
     assert.equal(JSON.parse(readFileSync(path.join(a.userData, 'state.json'))).id, 'notebook');
     assert.equal(statSync(path.join(a.userData, 'state.json')).mode & 0o777, 0o600);

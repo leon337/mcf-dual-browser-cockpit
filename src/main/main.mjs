@@ -6,10 +6,12 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LocalAgentBridge } from './bridge.mjs';
 import { PaneAgentRuntime } from './agent-runtime.mjs';
+import { agentBindingsForProfile } from './agent-identity.mjs';
 import { isGenerationStopControl } from './generation-control.mjs';
 import { instanceConfig, atomicJson } from './instance.mjs';
 
 const instance = instanceConfig(process.argv, app.getPath('userData'));
+const agentBindings = agentBindingsForProfile(instance.agentProfile);
 mkdirSync(instance.userData, { recursive: true, mode: 0o700 });
 app.setPath('userData', instance.userData);
 const ownsInstance = app.requestSingleInstanceLock();
@@ -41,7 +43,9 @@ let paneAgentRuntime = null;
 let restoredRuntimeState = null;
 let runtimePersistTimer = null;
 const RUNTIME_STATE_VERSION = 1;
-const PANE_AGENT_MISSION_ID = 'MCF-DUAL-AGENT-IDENTITY-001';
+const PANE_AGENT_MISSION_ID = instance.agentProfile === 'debug-engineering'
+  ? 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003'
+  : 'MCF-DUAL-AGENT-IDENTITY-001';
 
 const viewState = {
   chat: { url: CHATGPT_URL, title: 'ChatGPT', loading: true, canGoBack: false, canGoForward: false },
@@ -103,7 +107,13 @@ function persistBridgeState(state) {
   const payload = state?.enabled
     ? state
     : { enabled: false, host: '127.0.0.1', port: null, token: null };
-  atomicJson(output, { ...payload, instanceId: instance.id, pid: process.pid, version: app.getVersion() });
+  atomicJson(output, {
+    ...payload,
+    instanceId: instance.id,
+    agentProfile: instance.agentProfile,
+    pid: process.pid,
+    version: app.getVersion(),
+  });
 }
 
 
@@ -910,6 +920,7 @@ function createPaneAgentIdentityRuntime() {
     missionId: PANE_AGENT_MISSION_ID,
     broker,
     surface,
+    agentBindings,
     loadState: loadPaneAgentState,
     saveState: savePaneAgentState,
     startupReady: false,
@@ -1328,7 +1339,7 @@ function createWindow() {
     ...(savedBounds ?? { width: 1500, height: 920 }),
     minWidth: 900,
     minHeight: 620,
-    title: `MCF Dual Browser Cockpit · ${instance.id}`,
+    title: `MCF Dual Browser Cockpit · ${instance.id} · ${instance.agentProfile}`,
     backgroundColor: '#090d12',
     show: false,
     autoHideMenuBar: true,

@@ -16,11 +16,29 @@ function loadManifest(relativePath) {
 
 const EMILY = loadManifest('../../agents/emily.json');
 const SOFIA = loadManifest('../../agents/sofia.json');
+const PATRICIA = loadManifest('../../agents/patricia.json');
+const RAFAEL = loadManifest('../../agents/rafael.json');
 
-const BINDINGS = Object.freeze({
-  chat: EMILY,
-  workspace: SOFIA,
+export const DEFAULT_AGENT_PROFILE = 'audit-architecture';
+
+const AGENT_PROFILES = Object.freeze({
+  'audit-architecture': Object.freeze({
+    chat: EMILY,
+    workspace: SOFIA,
+  }),
+  'debug-engineering': Object.freeze({
+    chat: PATRICIA,
+    workspace: RAFAEL,
+  }),
 });
+
+export function agentBindingsForProfile(profile = DEFAULT_AGENT_PROFILE) {
+  const bindings = AGENT_PROFILES[String(profile || '')];
+  if (!bindings) throw new Error('unknown_agent_profile');
+  return bindings;
+}
+
+const BINDINGS = agentBindingsForProfile();
 
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -37,16 +55,30 @@ export function stableSha256(value) {
   return createHash('sha256').update(encoded).digest('hex');
 }
 
-export function agentBindingForPane(pane) {
-  const binding = BINDINGS[pane];
+function normalizeAgentKey(value) {
+  return String(value || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+export function agentBindingForPane(pane, bindings = BINDINGS) {
+  const binding = bindings?.[pane];
   if (!binding) throw new Error('unknown_agent_pane');
   return binding;
 }
 
-export function paneForAgent(agent) {
-  const needle = String(agent || '').trim().toLowerCase();
-  if (['emily', 'emilly'].includes(needle)) return 'chat';
-  if (['sofia', 'sophia'].includes(needle)) return 'workspace';
+export function paneForAgent(agent, bindings = BINDINGS) {
+  let needle = normalizeAgentKey(agent);
+  if (needle === 'emilly') needle = 'emily';
+  if (needle === 'sophia') needle = 'sofia';
+  for (const [pane, binding] of Object.entries(bindings || {})) {
+    if (normalizeAgentKey(binding?.agentId) === needle
+        || normalizeAgentKey(binding?.canonicalName) === needle) {
+      return pane;
+    }
+  }
   throw new Error('unknown_canonical_agent');
 }
 

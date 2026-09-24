@@ -60,6 +60,7 @@ export class PaneAgentRuntime {
     missionId,
     broker,
     surface,
+    agentBindings = null,
     loadState = () => null,
     saveState = () => {},
     now = () => new Date().toISOString(),
@@ -72,6 +73,8 @@ export class PaneAgentRuntime {
     this.missionId = missionId;
     this.broker = broker;
     this.surface = surface;
+    this.agentBindings = agentBindings || undefined;
+    for (const pane of PANES) agentBindingForPane(pane, this.agentBindings);
     this.loadState = loadState;
     this.saveState = saveState;
     this.now = now;
@@ -79,6 +82,15 @@ export class PaneAgentRuntime {
     this.missionTasks = new Map();
     this.paneMissionQueues = new Map();
     const loaded = loadState();
+    if (loaded?.schema === PANE_AGENT_RUNTIME_SCHEMA) {
+      for (const pane of PANES) {
+        const persistedAgentId = loaded?.bindings?.[pane]?.agentId;
+        const configuredAgentId = agentBindingForPane(pane, this.agentBindings).agentId;
+        if (persistedAgentId && persistedAgentId !== configuredAgentId) {
+          throw new Error('agent_binding_profile_mismatch');
+        }
+      }
+    }
     this.state = loaded?.schema === PANE_AGENT_RUNTIME_SCHEMA
       ? {
           ...initialState(instanceId, missionId),
@@ -180,7 +192,7 @@ export class PaneAgentRuntime {
     if (!record?.pane || !record?.sessionId || !record?.envelope) {
       throw new Error('mission_recovery_context_missing');
     }
-    const manifest = agentBindingForPane(record.pane);
+    const manifest = agentBindingForPane(record.pane, this.agentBindings);
     return {
       binding: {
         ...manifest,
@@ -201,7 +213,7 @@ export class PaneAgentRuntime {
 
   getIdentities() {
     return PANES.map((pane) => {
-      const manifest = agentBindingForPane(pane);
+      const manifest = agentBindingForPane(pane, this.agentBindings);
       const current = this.state.bindings[pane] ?? {};
       return {
         pane,
@@ -268,7 +280,7 @@ export class PaneAgentRuntime {
   }
 
   async #bootstrapPane(pane, canonicalAgents, force) {
-    const manifest = agentBindingForPane(pane);
+    const manifest = agentBindingForPane(pane, this.agentBindings);
     const canonical = canonicalAgents.find(agent => agent.agentId === manifest.agentId);
     const binding = validateCanonicalAgent(manifest, canonical);
     const { session, reused } = await this.#sessionForPane(pane, binding, force);
@@ -378,13 +390,13 @@ export class PaneAgentRuntime {
     const canonicalAgents = Array.isArray(registry) ? registry : registry?.agents;
     if (!Array.isArray(canonicalAgents)) throw new Error('canonical_agent_registry_unavailable');
 
-    const panes = agentId ? [paneForAgent(agentId)] : [...PANES];
+    const panes = agentId ? [paneForAgent(agentId, this.agentBindings)] : [...PANES];
     const results = [];
     for (const pane of panes) {
       try {
         results.push(await this.#bootstrapPane(pane, canonicalAgents, Boolean(force)));
       } catch (error) {
-        const manifest = agentBindingForPane(pane);
+        const manifest = agentBindingForPane(pane, this.agentBindings);
         const current = this.state.bindings[pane] ?? {
           pane,
           agentId: manifest.agentId,
@@ -415,8 +427,8 @@ export class PaneAgentRuntime {
       };
     }
 
-    const pane = paneForAgent(input?.agentId);
-    const manifest = agentBindingForPane(pane);
+    const pane = paneForAgent(input?.agentId, this.agentBindings);
+    const manifest = agentBindingForPane(pane, this.agentBindings);
 
     const requestedMissionId = input?.missionId == null ? null : String(input.missionId);
     const requestedParentMissionId = input?.parentMissionId == null
