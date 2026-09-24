@@ -1,11 +1,56 @@
-Real four-agent live-channel smoke: PENDING_RELEASE_BUILD
+MCF-LIVE-AGENT-COMMS-001 — Real smoke
+STATUS: PASS
 
-Required:
-1. run the same qualified AppImage in notebook and notebook-team2;
-2. open one authenticated SSE stream per instance;
-3. dispatch Emily, Sofia, Patrícia and Rafael;
-4. observe lifecycle events without pane polling;
-5. disconnect/reconnect one stream with Last-Event-ID and prove replay;
-6. verify no cross-instance events;
-7. compare COMPLETED event result IDs/hash/text with /v1/mission-result;
-8. capture visible final screenshots from both Cockpit windows.
+Release:
+0.6.0
+c11e3984fc76a19780593d35eaabc7f903193322
+AppImage SHA-256 07293708ed3a8ac8aa6d21cb9d6a3813db6015737ee252772edda8a0678dedce
+
+Instances:
+notebook = 0.6.0 / audit-architecture / Bridge healthy
+notebook-team2 = 0.6.0 / debug-engineering / Bridge healthy
+
+Four-agent smoke parent:
+MCF-LIVE-AGENT-COMMS-001-SMOKE-0.6.0-R1
+
+notebook parent:
+required=2 completed=2 active=0 closable=true
+
+notebook-team2 parent:
+required=2 completed=2 active=0 closable=true
+
+Emily COMPLETED:
+envelope 89983ba3-3bc8-4821-9d6a-629cafa3981f
+result de5759af55b46b3152ee34e6434759523bcebbc11c3283424de78cd2ca450235
+COMPLETED event 0c418fef-e4ac-4da8-add2-a6b5a1064a2a:54
+
+Sofia COMPLETED:
+envelope 8461ae75-12e0-4334-b52e-5074c0a4d2a4
+result d85d46bda5ec27a4faf38c5b360c135e8e460dda7c7b994659a0452b5af3cf29
+COMPLETED event 0c418fef-e4ac-4da8-add2-a6b5a1064a2a:49
+
+Patrícia COMPLETED:
+envelope e1490935-7fd1-4917-9641-d9ae2ff8f47b
+result 6d62d6138c3765a6b690419009279c198e1e1b7a46249861c71105ca0c67feb6
+COMPLETED event cbc37329-5c93-4802-af7e-6922024187af:55
+
+Rafael COMPLETED:
+envelope 81f6dddf-2a93-4783-a443-9bcaf5c3e24b
+result ee612503f244c3b8ea58aa4ddac2be31a171ac0ac124a8095a45679490558cc7
+COMPLETED event cbc37329-5c93-4802-af7e-6922024187af:70
+
+Replay/reconnect:
+PASS
+Last-Event-ID cbc37329-5c93-4802-af7e-6922024187af:64
+channel.ready replayCount=7
+resetRequired=false
+Rafael WORKING :67
+Rafael RESULT_CAPTURED :68 bodyAvailable=false
+Rafael COMPLETED :70 bodyAvailable=true
+
+Result integrity:
+All four COMPLETED stream resultSha256 values match /v1/mission-result.
+
+Visual full-window hashes:
+notebook b9cf7d79fb339305b7e7fdded83c8b5d5c3f845db45064951f9afbf3b6169c21
+notebook-team2 ab42048bee4a486666042e810a356a0fce0687b4053db3880109d5e9058ea59d

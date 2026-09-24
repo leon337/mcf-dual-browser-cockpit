@@ -1,0 +1,137 @@
+{
+  "schema": "mcf-live-smoke/v1",
+  "status": "PASS",
+  "artifact": {
+    "version": "0.6.0",
+    "releaseSha": "c11e3984fc76a19780593d35eaabc7f903193322",
+    "appImageSha256": "07293708ed3a8ac8aa6d21cb9d6a3813db6015737ee252772edda8a0678dedce"
+  },
+  "parentMissionId": "MCF-LIVE-AGENT-COMMS-001-SMOKE-0.6.0-R1",
+  "instances": {
+    "notebook": {
+      "version": "0.6.0",
+      "pid": 1523619,
+      "agentProfile": "audit-architecture",
+      "bootId": "0c418fef-e4ac-4da8-add2-a6b5a1064a2a",
+      "highWatermarkEventId": "0c418fef-e4ac-4da8-add2-a6b5a1064a2a:55"
+    },
+    "notebook-team2": {
+      "version": "0.6.0",
+      "pid": 1523618,
+      "agentProfile": "debug-engineering",
+      "bootId": "cbc37329-5c93-4802-af7e-6922024187af",
+      "highWatermarkEventId": "cbc37329-5c93-4802-af7e-6922024187af:71"
+    }
+  },
+  "results": {
+    "MCF-LIVE-AGENT-COMMS-001-SMOKE-EMILY-R1": {
+      "agentId": "Emily",
+      "instanceId": "notebook",
+      "envelopeId": "89983ba3-3bc8-4821-9d6a-629cafa3981f",
+      "completedEventId": "0c418fef-e4ac-4da8-add2-a6b5a1064a2a:54",
+      "resultCapturedEventId": "0c418fef-e4ac-4da8-add2-a6b5a1064a2a:52",
+      "resultSha256": "de5759af55b46b3152ee34e6434759523bcebbc11c3283424de78cd2ca450235",
+      "assistantMessageId": "63f6e400-3aa9-45f6-b748-631a1c58ff18",
+      "conversationId": "6ab4c08e-3a40-83e9-bfeb-ac89cf21dfbc",
+      "linkedUserMessageId": "7e7e2112-6f5c-4a2f-b49a-5ffd8505d8a7",
+      "bodyAvailableOnlyAtCompleted": true
+    },
+    "MCF-LIVE-AGENT-COMMS-001-SMOKE-SOFIA-R1": {
+      "agentId": "Sofia",
+      "instanceId": "notebook",
+      "envelopeId": "8461ae75-12e0-4334-b52e-5074c0a4d2a4",
+      "completedEventId": "0c418fef-e4ac-4da8-add2-a6b5a1064a2a:49",
+      "resultCapturedEventId": "0c418fef-e4ac-4da8-add2-a6b5a1064a2a:47",
+      "resultSha256": "d85d46bda5ec27a4faf38c5b360c135e8e460dda7c7b994659a0452b5af3cf29",
+      "assistantMessageId": "0e5477ec-40e6-4a7d-8e3b-fd1f5368013a",
+      "conversationId": "6ab4c062-ad7c-83e9-ac2b-23a256bd521c",
+      "linkedUserMessageId": "faf69ad5-5c0c-4686-8594-3dc8fcf4d3f5",
+      "bodyAvailableOnlyAtCompleted": true
+    },
+    "MCF-LIVE-AGENT-COMMS-001-SMOKE-PATRICIA-R1": {
+      "agentId": "Patrícia",
+      "instanceId": "notebook-team2",
+      "envelopeId": "e1490935-7fd1-4917-9641-d9ae2ff8f47b",
+      "completedEventId": "cbc37329-5c93-4802-af7e-6922024187af:55",
+      "resultCapturedEventId": "cbc37329-5c93-4802-af7e-6922024187af:53",
+      "resultSha256": "6d62d6138c3765a6b690419009279c198e1e1b7a46249861c71105ca0c67feb6",
+      "assistantMessageId": "1f8ead31-a005-46ec-bfc7-01f19cae5444",
+      "conversationId": "6ab50f25-91c4-83e9-8224-9b8408812023",
+      "linkedUserMessageId": "28888501-5f6b-4e44-8208-7e6e27a29500",
+      "bodyAvailableOnlyAtCompleted": true
+    },
+    "MCF-LIVE-AGENT-COMMS-001-SMOKE-RAFAEL-R1": {
+      "agentId": "Rafael",
+      "instanceId": "notebook-team2",
+      "envelopeId": "81f6dddf-2a93-4783-a443-9bcaf5c3e24b",
+      "completedEventId": "cbc37329-5c93-4802-af7e-6922024187af:70",
+      "resultCapturedEventId": "cbc37329-5c93-4802-af7e-6922024187af:68",
+      "resultSha256": "ee612503f244c3b8ea58aa4ddac2be31a171ac0ac124a8095a45679490558cc7",
+      "assistantMessageId": "acd21076-ea85-4cae-9518-95ca21efac5f",
+      "conversationId": "6ab50853-1064-83e9-a885-8e7d8fee15a1",
+      "linkedUserMessageId": "b2afb1da-0f2f-4043-8c77-0ae92ab2573a",
+      "bodyAvailableOnlyAtCompleted": true
+    }
+  },
+  "parents": {
+    "notebook": {
+      "parentMissionId": "MCF-LIVE-AGENT-COMMS-001-SMOKE-0.6.0-R1",
+      "required": 2,
+      "completed": 2,
+      "active": 0,
+      "attempts": 2,
+      "closable": true,
+      "blockers": []
+    },
+    "notebook-team2": {
+      "parentMissionId": "MCF-LIVE-AGENT-COMMS-001-SMOKE-0.6.0-R1",
+      "required": 2,
+      "completed": 2,
+      "active": 0,
+      "attempts": 2,
+      "closable": true,
+      "blockers": []
+    }
+  },
+  "replay": {
+    "status": "PASS",
+    "instanceId": "notebook-team2",
+    "lastEventId": "cbc37329-5c93-4802-af7e-6922024187af:64",
+    "channelReady": {
+      "schema": "mcf-live-agent-event-snapshot/v1",
+      "instanceId": "notebook-team2",
+      "agentProfile": "debug-engineering",
+      "bootId": "cbc37329-5c93-4802-af7e-6922024187af",
+      "requestedAfter": "cbc37329-5c93-4802-af7e-6922024187af:64",
+      "oldestEventId": "cbc37329-5c93-4802-af7e-6922024187af:1",
+      "highWatermarkEventId": "cbc37329-5c93-4802-af7e-6922024187af:71",
+      "resetRequired": false,
+      "resetReason": null,
+      "replayCount": 7
+    },
+    "replayed": [
+      {
+        "eventId": "cbc37329-5c93-4802-af7e-6922024187af:67",
+        "state": "WORKING",
+        "resultSha256": null,
+        "bodyAvailable": null
+      },
+      {
+        "eventId": "cbc37329-5c93-4802-af7e-6922024187af:68",
+        "state": "RESULT_CAPTURED",
+        "resultSha256": "ee612503f244c3b8ea58aa4ddac2be31a171ac0ac124a8095a45679490558cc7",
+        "bodyAvailable": false
+      },
+      {
+        "eventId": "cbc37329-5c93-4802-af7e-6922024187af:70",
+        "state": "COMPLETED",
+        "resultSha256": "ee612503f244c3b8ea58aa4ddac2be31a171ac0ac124a8095a45679490558cc7",
+        "bodyAvailable": true
+      }
+    ]
+  },
+  "isolation": {
+    "crossInstanceLeakObserved": false,
+    "provenBy": "two-bridge unit test + instance-local live snapshots"
+  }
+}

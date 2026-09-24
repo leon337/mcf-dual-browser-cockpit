@@ -3,19 +3,39 @@ phase_id: PHASE-01-LIVE-AGENT-COMMS
 class: C
 authority: LEANDRO
 orchestrator: MESTRE
-state: VALIDATING_RELEASE_CANDIDATE
+state: REMEDIATION_APPLIED_READY_FOR_FINAL_REAUDIT
 baseline_sha: 6fcc47c4b64f6f5d8b93f09b96d8f98947c9fdb8
 version: 0.6.0
+release_sha: c11e3984fc76a19780593d35eaabc7f903193322
+appimage_sha256: 07293708ed3a8ac8aa6d21cb9d6a3813db6015737ee252772edda8a0678dedce
+ci:
+  workflow: Checks
+  run_number: 77
+  run_id: 35995227792
+  conclusion: SUCCESS
+  sha: c11e3984fc76a19780593d35eaabc7f903193322
 local_validation:
+  node: v22.23.2
   check: PASS
-  tests: "55/55 PASS"
+  tests: 55/55_PASS
   diff_check: PASS
-release_sha: PENDING
-appimage_sha256: PENDING
-ci: PENDING
-smoke: PENDING
-audit: PENDING
-deployment: PENDING
+smoke:
+  status: PASS
+  agents_completed: 4
+  replay: PASS
+  instance_isolation: PASS
+deployment:
+  status: LOCAL_PRODUCTION_ACTIVE
+  notebook_version: 0.6.0
+  notebook_team2_version: 0.6.0
+audit_r1:
+  state: COMPLETED
+  result_sha256: acfb7e5a57ab1756493561191deaebaef863912fb3ac3a42c998901ff058953f
+  critical: 0
+  high: 1
+  high_id: PRF-CLOSEOUT-0.6.0-001
+  remediation: APPLIED_DOCUMENTATION_ONLY
+next_gate: EMILY_POST_REMEDIATION_REAUDIT
 prohibitions:
   - do_not_merge_pr_6_without_separate_leandro_decision
   - do_not_delete_mcf_agent_lifecycle_002_untracked_evidence

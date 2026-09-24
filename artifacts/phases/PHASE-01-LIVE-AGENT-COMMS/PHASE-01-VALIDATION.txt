@@ -1,20 +1,48 @@
 MCF-LIVE-AGENT-COMMS-001
-PHASE-01 local validation
+PHASE-01 release validation
 
-npm run check: PASS
-npm test: 55/55 PASS
-git diff --check: PASS
+Release source SHA:
+c11e3984fc76a19780593d35eaabc7f903193322
 
-Coverage added:
-- bounded live event replay;
-- boot cursor reset;
-- authenticated instance-scoped snapshot;
-- two-Bridge isolation;
-- SSE replay after cursor;
-- conversation-change fail-closed and pane queue release;
-- persistent anchor loss fail-closed and pane queue release;
-- later user turn does not block prior terminal assistant turn;
-- RESULT_CAPTURED does not expose unverified result body;
-- COMPLETED exposes verified result body.
+Version:
+0.6.0
 
-Final CI/build/smoke: PENDING_RELEASE_SHA
+Supported local qualification runtime:
+Node v22.23.2
+npm 10.9.8
+
+npm run check:
+PASS
+
+npm test:
+55/55 PASS
+0 fail
+0 skipped
+
+git diff --check:
+PASS
+
+GitHub Actions:
+Checks #77
+run id 35995227792
+SUCCESS
+bound to release source SHA c11e3984fc76a19780593d35eaabc7f903193322
+
+AppImage:
+MCF Dual Browser Cockpit-0.6.0-linux-x86_64.AppImage
+SHA-256 07293708ed3a8ac8aa6d21cb9d6a3813db6015737ee252772edda8a0678dedce
+
+Four-agent live smoke:
+PASS
+
+Reconnect/replay:
+PASS
+
+Two-instance local deployment:
+PASS
+
+Independent audit R1:
+COMPLETED
+result SHA-256 acfb7e5a57ab1756493561191deaebaef863912fb3ac3a42c998901ff058953f
+0 Critical
+1 High documentation-only, remediated in this closeout update
