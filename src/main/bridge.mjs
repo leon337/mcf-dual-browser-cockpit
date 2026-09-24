@@ -212,13 +212,37 @@ export class LocalAgentBridge {
       return { ok: false, pane, error: 'message_transport_unavailable' };
     }
 
-    const prepared = await wc.executeJavaScript(`(() => {
+    const prepared = await wc.executeJavaScript(`(async () => {
+      const enforceChatMode = ${pane === 'chat' ? 'true' : 'false'};
       const visible = (el) => {
         if (!el) return false;
         const r = el.getBoundingClientRect();
         const s = getComputedStyle(el);
         return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
       };
+
+      if (enforceChatMode) {
+        const findModeButton = (label) => [...document.querySelectorAll('button[role="radio"]')]
+          .filter(visible)
+          .find(button => String(button.innerText || button.textContent || '').trim() === label);
+        let chatMode = findModeButton('Chat');
+        let workMode = findModeButton('Work');
+
+        if (chatMode && chatMode.getAttribute('data-state') !== 'on') {
+          chatMode.click();
+          await new Promise(resolve => setTimeout(resolve, 300));
+          chatMode = findModeButton('Chat');
+          workMode = findModeButton('Work');
+        }
+
+        if (chatMode && chatMode.getAttribute('data-state') !== 'on') {
+          return { ok:false, error:'chat_mode_switch_failed' };
+        }
+        if (chatMode && workMode && workMode.getAttribute('data-state') === 'on') {
+          return { ok:false, error:'chat_mode_switch_failed' };
+        }
+      }
+
       const composer = document.querySelector('#prompt-textarea')
         || document.querySelector('textarea')
         || [...document.querySelectorAll('[contenteditable="true"]')].find(visible);

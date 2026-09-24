@@ -76,6 +76,7 @@ test('message API targets chat and workspace without system input and broadcasts
   const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-message-'));
   let entrants = 0;
   const inserted = { chat: [], workspace: [] };
+  const scripts = { chat: [], workspace: [] };
 
   function fakeWebContents(pane) {
     return {
@@ -84,7 +85,7 @@ test('message API targets chat and workspace without system input and broadcasts
       getTitle: () => pane,
       isLoading: () => false,
       navigationHistory: { canGoBack: () => false, canGoForward: () => false },
-      executeJavaScript: async () => ({ ok: true, sent: true }),
+      executeJavaScript: async script => { scripts[pane].push(script); return { ok: true, sent: true }; },
       insertText: async value => {
         inserted[pane].push(value);
       },
@@ -118,6 +119,7 @@ test('message API targets chat and workspace without system input and broadcasts
   const single = await request('/v1/message', { pane: 'chat', message: 'olá emilly' });
   assert.equal(single.status, 200);
   assert.deepEqual(inserted.chat, ['olá emilly']);
+  assert.ok(scripts.chat[0].includes('const enforceChatMode = true'));
 
   entrants = 0;
   let releaseBroadcast;
@@ -144,6 +146,7 @@ test('message API targets chat and workspace without system input and broadcasts
   assert.deepEqual(payload.targets.sort(), ['chat', 'workspace']);
   assert.deepEqual(inserted.chat, ['olá emilly', 'teste simultâneo']);
   assert.deepEqual(inserted.workspace, ['teste simultâneo']);
+  assert.ok(scripts.workspace.some(script => script.includes('const enforceChatMode = false')));
 
   assert.equal((await request('/v1/message', { pane: 'other', message: 'x' })).status, 400);
   assert.equal((await request('/v1/message', { pane: 'chat', message: '' })).status, 400);
