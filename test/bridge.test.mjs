@@ -463,6 +463,8 @@ test('CR-01: unconfirmed delivery after one submit never resubmits or clicks Sto
       if (script.includes('conversationAdvanced')) {
         verificationCalls += 1;
         assert.equal(generationActive, true);
+        assert.equal(script.includes('send.click()'), false);
+        assert.equal(script.includes('stopControl.click'), false);
         return {
           ok: true,
           composerCleared: true,
@@ -549,6 +551,10 @@ test('CR-14: Stop appearing after insert blocks submit without clicking it', asy
       }
       if (script.includes('chat_send_control_not_found')) {
         submitGuardCalls += 1;
+        const stopGuardIndex = script.indexOf('if (stopControl)');
+        const sendClickIndex = script.indexOf('send.click()');
+        assert.ok(stopGuardIndex >= 0);
+        assert.ok(sendClickIndex > stopGuardIndex);
         return {
           ok: false,
           error: 'message_send_blocked_generation_active',
@@ -561,7 +567,6 @@ test('CR-14: Stop appearing after insert blocks submit without clicking it', asy
           remainingLength: 0,
         };
       }
-      if (script.includes('send.click')) submitClicks += 1;
       return { ok: true };
     },
     insertText: async () => { insertCalls += 1; },
