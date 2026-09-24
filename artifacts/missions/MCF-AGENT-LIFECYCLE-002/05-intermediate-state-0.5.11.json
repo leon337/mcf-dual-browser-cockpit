@@ -1,0 +1,210 @@
+{
+  "summary": {
+    "states": {
+      "Sofia": "COMPLETED",
+      "Emily": "WORKING"
+    },
+    "parent": {
+      "required": 2,
+      "completed": 1,
+      "active": 1,
+      "closable": false
+    }
+  },
+  "missions": {
+    "Sofia": {
+      "schema": "mcf-agent-mission-execution/v1",
+      "envelopeId": "d187abea-041c-4daa-b2af-7913c7a7fd45",
+      "missionId": "MCF-AGENT-LIFECYCLE-002-SOFIA-VISUAL-FINAL-0.5.11-R1",
+      "parentMissionId": "MCF-AGENT-LIFECYCLE-002-VISUAL-FINAL-0.5.11-R1",
+      "required": true,
+      "executionId": "87668ada-ee9e-4b99-b061-794877720bba",
+      "agentId": "Sofia",
+      "role": "Arquitetura de Software",
+      "pane": "workspace",
+      "sessionId": "590079f3-ac4f-4b97-95ee-24a847ba5a61",
+      "traceId": "5a4a9120-5b5d-470d-9408-7f0e8a1baabd",
+      "contractRef": "docs/agentes/SOFIA.md",
+      "contractDigest": "06ffc53d7466471b1541070990b02acde1a7350a63cb41b1b299f3ef0f28b6f3",
+      "envelopeDigest": "cc57efbb863406955ffbe7497d81e1177d2c25c6e1f80f8ba94c8fda326a7fbf",
+      "envelope": {
+        "schema": "mcf-mission-envelope/v1",
+        "envelopeId": "d187abea-041c-4daa-b2af-7913c7a7fd45",
+        "createdAt": "2026-09-24T08:56:56.068Z",
+        "missionId": "MCF-AGENT-LIFECYCLE-002-SOFIA-VISUAL-FINAL-0.5.11-R1",
+        "parentMissionId": "MCF-AGENT-LIFECYCLE-002-VISUAL-FINAL-0.5.11-R1",
+        "required": true,
+        "agent": {
+          "agentId": "Sofia",
+          "role": "Arquitetura de Software",
+          "pane": "workspace",
+          "contractRef": "docs/agentes/SOFIA.md",
+          "contractDigest": "06ffc53d7466471b1541070990b02acde1a7350a63cb41b1b299f3ef0f28b6f3"
+        },
+        "session": {
+          "sessionId": "590079f3-ac4f-4b97-95ee-24a847ba5a61",
+          "traceId": "5a4a9120-5b5d-470d-9408-7f0e8a1baabd"
+        },
+        "authority": {
+          "human": "LEANDRO",
+          "orchestrator": "MESTRE"
+        },
+        "objective": "Valide arquiteturalmente o lifecycle verificável 0.5.11 em 12 itens substantivos: DELIVERED, userMessageId, idempotência, cleanup conservador, ACCEPTED, WORKING, placeholder→ID final, interrupção visual, prova terminal, RESULT_CAPTURED, recovery bounded e barreira da missão-pai. Não altere código.",
+        "inputs": [
+          "37/37 testes verdes",
+          "dispatch idempotente",
+          "placeholder nunca é terminal",
+          "interrupção visual bloqueia completion",
+          "recovery preserva userMessageId e é bounded",
+          "evidência visual será cruzada com estado e DOM"
+        ],
+        "constraints": [
+          "não alterar código",
+          "não assumir auditoria independente",
+          "LEANDRO é autoridade final",
+          "MESTRE só fecha após COMPLETED"
+        ],
+        "expectedOutputs": [
+          "relatório arquitetural de 12 itens"
+        ]
+      },
+      "acceptanceMarker": "MCF_MISSION_ACCEPTED envelope_id=d187abea-041c-4daa-b2af-7913c7a7fd45 agent_id=Sofia",
+      "state": "COMPLETED",
+      "revision": 6,
+      "createdAt": "2026-09-24T08:56:56.068Z",
+      "updatedAt": "2026-09-24T08:58:27.362Z",
+      "result": {
+        "schema": "mcf-agent-result/v1",
+        "envelopeId": "d187abea-041c-4daa-b2af-7913c7a7fd45",
+        "missionId": "MCF-AGENT-LIFECYCLE-002-SOFIA-VISUAL-FINAL-0.5.11-R1",
+        "parentMissionId": "MCF-AGENT-LIFECYCLE-002-VISUAL-FINAL-0.5.11-R1",
+        "executionId": "87668ada-ee9e-4b99-b061-794877720bba",
+        "agentId": "Sofia",
+        "pane": "workspace",
+        "sessionId": "590079f3-ac4f-4b97-95ee-24a847ba5a61",
+        "traceId": "5a4a9120-5b5d-470d-9408-7f0e8a1baabd",
+        "envelopeDigest": "cc57efbb863406955ffbe7497d81e1177d2c25c6e1f80f8ba94c8fda326a7fbf",
+        "conversationId": "6ab4c062-ad7c-83e9-ac2b-23a256bd521c",
+        "assistantMessageId": "dbf145f5-c7b8-40aa-bc9e-6536b14c59e7",
+        "acceptedAssistantStartMessageId": "request-placeholder-request-6ab4c062-ad7c-83e9-ac2b-23a256bd521c-0",
+        "acceptedAssistantMessageId": "dbf145f5-c7b8-40aa-bc9e-6536b14c59e7",
+        "linkedUserMessageId": "73ca0105-5c34-4cf3-9328-0257588cce7b",
+        "assistantIdMigratedFrom": "request-placeholder-request-6ab4c062-ad7c-83e9-ac2b-23a256bd521c-0",
+        "acceptanceMarkerObserved": false,
+        "url": "https://chatgpt.com/g/g-p-6ab4a8a7448881918c12953ee47ad080-sophia/c/6ab4c062-ad7c-83e9-ac2b-23a256bd521c",
+        "text": "Revisão arquitetural — Lifecycle 0.5.11\n\nDELIVERED. A arquitetura está correta ao tratar entrega como efeito observado, não como simples chamada de transporte. A validação remota 0.5.11 registra cobertura para avanço real da conversa antes de DELIVERED, preservando a separação entre “envio tentado” e “turno efetivamente criado”.\n\nuserMessageId. O userMessageId funciona como âncora causal da missão. O runtime preserva esse identificador no contexto de recuperação e o usa para correlacionar resultado e migração de assistantMessageId, o que reduz risco de capturar resposta pertencente a outro turno.\n\nIdempotência. O dispatch está arquiteturalmente bem protegido: mesma combinação lógica de missionId + parentMissionId + agentId e mesmo conteúdo é deduplicada; reutilização com intenção diferente resulta em mission_id_conflict. Isso impede dupla execução silenciosa e reaproveitamento ambíguo de identidade de missão.\n\nCleanup conservador. A estratégia é adequada: resíduos reconhecidos como draft MCF podem ser removidos, enquanto texto não reconhecido deve ser preservado. A suíte remota declara cobertura explícita tanto para limpeza do draft MCF quanto para preservação de conteúdo desconhecido, evitando limpeza destrutiva.\n\nACCEPTED. O aceite permanece corretamente separado de conclusão e é associado ao turno do assistente que responde à entrega. Há, porém, uma nuance estrutural: a máquina permite ACCEPTED → RESULT_CAPTURED diretamente. Isso é aceitável apenas quando o resultado já está terminalmente comprovado antes de o runtime observar um intervalo WORKING; não pode servir como atalho para eliminar prova de execução.\n\nWORKING. O estado representa execução ativa e bloqueia a missão-pai. A validação remota registra especificamente “parent bloqueado durante WORKING”. Para máxima rastreabilidade, recomendo manter WORKING sempre que houver qualquer evidência observável de geração ativa, usando o salto direto apenas para resultados já terminalmente estáveis no primeiro ponto de observação.\n\nPlaceholder → ID definitivo. A implementação é estruturalmente forte: request-placeholder-* é explicitamente proibido como resultado terminal. A migração para ID real só é aceita quando assistantIdMigratedFrom corresponde ao placeholder original e linkedUserMessageId continua igual ao userMessageId entregue. Isso preserva identidade do mesmo turno lógico.\n\nInterrupção visual. O modelo corrige adequadamente um falso positivo importante. Raciocínio interrompido ou assinatura equivalente bloqueia captura/conclusão, e a validação documenta que a detecção passou de busca textual ampla para assinatura estrutural da UI, evitando classificar como interrompido um relatório que apenas menciona essa expressão.\n\nProva terminal. RESULT_CAPTURED exige generationFinished=true, ausência de geração ativa e um sinal terminal forte. Para o caminho visual ui_generation_inactive_with_final_actions, exige ainda finalActionsObserved=true e pelo menos 1200 ms de estabilidade. Placeholder, texto vazio, “Pensando” e respostas interrompidas são rejeitados.\n\nRESULT_CAPTURED. O resultado persistido contém identidade suficiente: envelopeId, missionId, executionId, agente, pane, sessão, trace, conversationId, assistantMessageId, vínculo ao userMessageId, eventual migração de ID e SHA-256 do texto. verifyResultCapture() recompõe o hash e rejeita inconsistências, fornecendo uma fronteira de integridade clara antes de completion.\n\nRecovery bounded. O restart converte execuções abertas em INTERRUPTED; recovery sem âncora de entrega falha fechado, e recovery sem resultado terminal dentro da janela observada termina em UNVERIFIED. A suíte confirma timeout de 30 s no cenário testado e preservação do userMessageId, evitando recovery infinito ou promoção por simples decurso de tempo.\n\nBarreira da missão-pai. A implementação está estrita: parentMissionStatus() considera a missão closable somente quando existe pelo menos uma sub-missão obrigatória e todas estão em COMPLETED. Qualquer outro estado aparece como blocker. Isso implementa diretamente o invariante exigido: MESTRE não fecha enquanto houver missão obrigatória não concluída.\n\nParecer Sofia\n\nA 0.5.11 está arquiteturalmente consistente para o objetivo de conclusão verificável, e agora há evidência remota concreta: branch mission/agent-lifecycle-completion-20260924, versão 0.5.11, PR #6 e validação pré-auditoria registrando 37/37 testes PASS.\n\nA principal atenção estrutural restante é documentar explicitamente a semântica do caminho ACCEPTED → RESULT_CAPTURED: ele deve representar apenas “resultado já terminal quando primeiro observado”, nunca supressão de WORKING enquanto geração estiver ativa.\n\nEste parecer é de arquitetura; não substitui a re-auditoria independente prevista para Emily. Nenhum código foi alterado.",
+        "resultSha256": "e4e9b8491235348e83c74fce481b36558a3c14232b996437c8b3ba95ba298906",
+        "capturedAt": "2026-09-24T08:58:27.312Z",
+        "terminalProof": {
+          "generationFinished": true,
+          "terminalSignal": "ui_generation_inactive_with_final_actions",
+          "generationActive": false,
+          "stableForMs": 1234,
+          "finalActionsObserved": true
+        }
+      },
+      "lastError": null,
+      "lastTransition": {
+        "from": "RESULT_CAPTURED",
+        "to": "COMPLETED",
+        "at": "2026-09-24T08:58:27.362Z",
+        "evidence": {
+          "assistantMessageId": "dbf145f5-c7b8-40aa-bc9e-6536b14c59e7",
+          "conversationId": "6ab4c062-ad7c-83e9-ac2b-23a256bd521c",
+          "resultSha256": "e4e9b8491235348e83c74fce481b36558a3c14232b996437c8b3ba95ba298906"
+        }
+      },
+      "delivery": {
+        "userMessageId": "73ca0105-5c34-4cf3-9328-0257588cce7b",
+        "baselineAssistantMessageId": "6c4a40b1-f92d-498c-a9b4-9d0aa84c4300",
+        "url": "https://chatgpt.com/g/g-p-6ab4a8a7448881918c12953ee47ad080-sophia/c/6ab4c062-ad7c-83e9-ac2b-23a256bd521c"
+      },
+      "acceptedAssistantStartMessageId": "request-placeholder-request-6ab4c062-ad7c-83e9-ac2b-23a256bd521c-0",
+      "acceptedAssistantMessageId": "dbf145f5-c7b8-40aa-bc9e-6536b14c59e7",
+      "acceptanceMarkerObserved": false,
+      "assistantMessageIdMigratedFrom": "request-placeholder-request-6ab4c062-ad7c-83e9-ac2b-23a256bd521c-0"
+    },
+    "Emily": {
+      "schema": "mcf-agent-mission-execution/v1",
+      "envelopeId": "e9bd40d4-d228-4406-8fac-fd114df7dc16",
+      "missionId": "MCF-AGENT-LIFECYCLE-002-EMILY-VISUAL-FINAL-0.5.11-R1",
+      "parentMissionId": "MCF-AGENT-LIFECYCLE-002-VISUAL-FINAL-0.5.11-R1",
+      "required": true,
+      "executionId": "426a495b-13c5-4e01-b17b-0b8c98cf5ec1",
+      "agentId": "Emily",
+      "role": "Auditoria Independente",
+      "pane": "chat",
+      "sessionId": "08473b19-9fe0-4662-8a8b-3fcc1ac3cb4c",
+      "traceId": "67088c7c-6219-4020-be14-685705de0c94",
+      "contractRef": "docs/agentes/EMILY.md",
+      "contractDigest": "9385ac2330d966133814c899540e9f33daad0f5eb423ec6a0a3e4a0bb48d70f4",
+      "envelopeDigest": "3a6c1e79bc88c132d4182b110b82de69966ec3e69a5c848dbf285310caa4683b",
+      "envelope": {
+        "schema": "mcf-mission-envelope/v1",
+        "envelopeId": "e9bd40d4-d228-4406-8fac-fd114df7dc16",
+        "createdAt": "2026-09-24T08:57:29.136Z",
+        "missionId": "MCF-AGENT-LIFECYCLE-002-EMILY-VISUAL-FINAL-0.5.11-R1",
+        "parentMissionId": "MCF-AGENT-LIFECYCLE-002-VISUAL-FINAL-0.5.11-R1",
+        "required": true,
+        "agent": {
+          "agentId": "Emily",
+          "role": "Auditoria Independente",
+          "pane": "chat",
+          "contractRef": "docs/agentes/EMILY.md",
+          "contractDigest": "9385ac2330d966133814c899540e9f33daad0f5eb423ec6a0a3e4a0bb48d70f4"
+        },
+        "session": {
+          "sessionId": "08473b19-9fe0-4662-8a8b-3fcc1ac3cb4c",
+          "traceId": "67088c7c-6219-4020-be14-685705de0c94"
+        },
+        "authority": {
+          "human": "LEANDRO",
+          "orchestrator": "MESTRE"
+        },
+        "objective": "Audite independentemente o lifecycle verificável 0.5.11 em 12 itens substantivos: DELIVERED, idempotência, composer residual, preservação de texto humano, ACCEPTED, WORKING, placeholder→ID final, interrupção visual, prova terminal, read-back, recovery bounded e decisão PASS/FAIL. Não altere código.",
+        "inputs": [
+          "37/37 testes verdes",
+          "dispatch idempotente",
+          "delivery ancorada em userMessageId",
+          "read-back rejeita placeholder/transitório",
+          "recovery bounded",
+          "evidência visual real fará parte do closeout"
+        ],
+        "constraints": [
+          "não alterar código",
+          "não inventar evidência",
+          "LEANDRO é autoridade final",
+          "MESTRE só fecha após COMPLETED"
+        ],
+        "expectedOutputs": [
+          "parecer independente de 12 itens"
+        ]
+      },
+      "acceptanceMarker": "MCF_MISSION_ACCEPTED envelope_id=e9bd40d4-d228-4406-8fac-fd114df7dc16 agent_id=Emily",
+      "state": "WORKING",
+      "revision": 4,
+      "createdAt": "2026-09-24T08:57:29.136Z",
+      "updatedAt": "2026-09-24T08:58:38.299Z",
+      "result": null,
+      "lastError": null,
+      "lastTransition": {
+        "from": "ACCEPTED",
+        "to": "WORKING",
+        "at": "2026-09-24T08:58:38.299Z",
+        "evidence": {
+          "marker": "MCF_MISSION_ACCEPTED envelope_id=e9bd40d4-d228-4406-8fac-fd114df7dc16 agent_id=Emily",
+          "assistantMessageId": "request-placeholder-request-6ab4c08e-3a40-83e9-bfeb-ac89cf21dfbc-2",
+          "observation": "assistant_result_pending"
+        }
+      },
+      "delivery": {
+        "userMessageId": "cd9867df-b622-45f9-a13a-5e0b74d2ea13",
+        "baselineAssistantMessageId": "3b3fa64c-d2a9-4dab-b011-a0a61f8000b2",
+        "url": "https://chatgpt.com/g/g-p-6ab4a8c273288191a6ddacbaff2b2a1e-emilly/c/6ab4c08e-3a40-83e9-bfeb-ac89cf21dfbc"
+      },
+      "acceptedAssistantStartMessageId": "request-placeholder-request-6ab4c08e-3a40-83e9-bfeb-ac89cf21dfbc-2",
+      "acceptedAssistantMessageId": "request-placeholder-request-6ab4c08e-3a40-83e9-bfeb-ac89cf21dfbc-2",
+      "acceptanceMarkerObserved": false
+    }
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "hitBothWorking": false,
+  "timeline": [
+    {
+      "t": 0.01,
+      "states": {
+        "Sofia": "WORKING",
+        "Emily": "QUEUED"
+      },
+      "parent": {
+        "required": 2,
+        "completed": 0,
+        "active": 2,
+        "closable": false
+      }
+    },
+    {
+      "t": 21.88,
+      "states": {
+        "Sofia": "RESULT_CAPTURED",
+        "Emily": "QUEUED"
+      },
+      "parent": {
+        "required": 2,
+        "completed": 0,
+        "active": 2,
+        "closable": false
+      }
+    },
+    {
+      "t": 21.94,
+      "states": {
+        "Sofia": "COMPLETED",
+        "Emily": "QUEUED"
+      },
+      "parent": {
+        "required": 2,
+        "completed": 1,
+        "active": 1,
+        "closable": false
+      }
+    }
+  ]
+}

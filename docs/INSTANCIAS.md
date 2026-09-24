@@ -16,3 +16,19 @@ A interface mostra a identidade da instância. PAUSAR bloqueia novos comandos de
 Agentes devem ler o descriptor do perfil correto, manter o token privado e enviar X-MCF-Instance com o ID esperado. Respostas 409 automation_busy exigem observar o estado antes de decidir repetir. Não repetir cliques cegamente. 423 automation_paused exige respeitar a pausa humana.
 
 Produção desktop é distribuída como AppImage, não como um site Vercel. A página Atlas permanece independente. Para reverter, feche somente a nova instância e execute o AppImage 0.2.0 preservado. Não apagar perfis.
+
+## Mensagens programáticas sem GUI
+
+A partir da versão 0.3.3, a Agent Bridge pode enviar mensagens diretamente aos dois painéis sem usar mouse, teclado do sistema ou foco de janela.
+
+Rotas:
+
+    POST /v1/message
+    {"pane":"chat|workspace","message":"..."}
+
+    POST /v1/messages/broadcast
+    {"targets":["chat","workspace"],"message":"..."}
+
+Aliases aceitos: emilly/emily -> chat e sophia/sofia -> workspace. O broadcast executa os alvos concorrentemente.
+
+A Bridge só declara sucesso quando o envio é confirmado pelo esvaziamento do compositor. Bloqueios reais do produto, como rate_limit_hard_block, são reportados por alvo e não são contornados.

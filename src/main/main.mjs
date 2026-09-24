@@ -5,9 +5,13 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LocalAgentBridge } from './bridge.mjs';
+import { PaneAgentRuntime } from './agent-runtime.mjs';
+import { agentBindingsForProfile } from './agent-identity.mjs';
+import { isGenerationStopControl, isTargetGenerationActive } from './generation-control.mjs';
 import { instanceConfig, atomicJson } from './instance.mjs';
 
 const instance = instanceConfig(process.argv, app.getPath('userData'));
+const agentBindings = agentBindingsForProfile(instance.agentProfile);
 mkdirSync(instance.userData, { recursive: true, mode: 0o700 });
 app.setPath('userData', instance.userData);
 const ownsInstance = app.requestSingleInstanceLock();
@@ -35,9 +39,13 @@ const agentSessionWindows = new Map();
 const agentSessionRuntime = new Map();
 let splitRatio = 0.5;
 let bridge = null;
+let paneAgentRuntime = null;
 let restoredRuntimeState = null;
 let runtimePersistTimer = null;
 const RUNTIME_STATE_VERSION = 1;
+const PANE_AGENT_MISSION_ID = instance.agentProfile === 'debug-engineering'
+  ? 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003'
+  : 'MCF-DUAL-AGENT-IDENTITY-001';
 
 const viewState = {
   chat: { url: CHATGPT_URL, title: 'ChatGPT', loading: true, canGoBack: false, canGoForward: false },
@@ -84,6 +92,13 @@ function emitState(key, wc) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('browser:state', { pane: key, ...viewState[key] });
   }
+  bridge?.publishLiveEvent({
+    type: 'PANE_STATE',
+    source: 'WebContents',
+    authority: 'observational',
+    pane: key,
+    state: { ...viewState[key] },
+  });
 }
 
 function emitBridgeEvent(payload) {
@@ -99,7 +114,13 @@ function persistBridgeState(state) {
   const payload = state?.enabled
     ? state
     : { enabled: false, host: '127.0.0.1', port: null, token: null };
-  atomicJson(output, { ...payload, instanceId: instance.id, pid: process.pid, version: app.getVersion() });
+  atomicJson(output, {
+    ...payload,
+    instanceId: instance.id,
+    agentProfile: instance.agentProfile,
+    pid: process.pid,
+    version: app.getVersion(),
+  });
 }
 
 
@@ -324,6 +345,668 @@ async function runAgentSessionTool(args) {
   } catch {
     throw new Error('mcf_agent_session_invalid_json');
   }
+}
+
+
+function paneAgentStateFile() {
+  return path.join(app.getPath('userData'), 'agent-identities.json');
+}
+
+function loadPaneAgentState() {
+  try {
+    const file = paneAgentStateFile();
+    if (!existsSync(file)) return null;
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    emitBridgeEvent({ level: 'error', message: 'Agent Identity: estado inválido — ' + error.message });
+    return null;
+  }
+}
+
+function savePaneAgentState(state) {
+  atomicJson(paneAgentStateFile(), state);
+}
+
+function projectRootForPane(pane) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) return CHATGPT_URL;
+  try {
+    const current = new URL(wc.getURL());
+    if (current.hostname === 'chatgpt.com') {
+      const match = current.pathname.match(/^\/g\/([^/]+)/);
+      if (match) return current.origin + '/g/' + match[1];
+    }
+  } catch {}
+  return CHATGPT_URL;
+}
+
+async function freshAgentConversation(pane) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) throw new Error('pane_unavailable');
+  const target = projectRootForPane(pane);
+  if (wc.getURL() !== target) await wc.loadURL(target);
+  const ready = await waitForChatComposer(wc, 30000);
+  if (!ready) throw new Error('chat_composer_not_found');
+  return { ok: true, url: wc.getURL() };
+}
+
+async function waitForConversationUrl(pane, timeoutMs = 15000) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) return null;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const current = wc.getURL();
+    try {
+      const parsed = new URL(current);
+      if (parsed.hostname === 'chatgpt.com' && /\/c\/[^/]+/.test(parsed.pathname)) return current;
+    } catch {}
+    await sleep(250);
+  }
+  return wc.getURL();
+}
+
+async function waitForAssistantMarker(pane, marker, timeoutMs = 60000) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) return false;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (wc.isDestroyed()) return false;
+    const found = await wc.executeJavaScript(
+      "(() => [...document.querySelectorAll('[data-message-author-role=\\\"assistant\\\"]')]"
+      + ".some(node => String(node.innerText || node.textContent || '').includes("
+      + JSON.stringify(marker)
+      + ")))()",
+      true,
+    ).catch(() => false);
+    if (found) return true;
+    await sleep(500);
+  }
+  return false;
+}
+
+async function waitForAssistantStart(
+  pane,
+  {
+    marker = null,
+    userMessageId = null,
+    baselineAssistantMessageId = null,
+  } = {},
+  timeoutMs = 60000,
+) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) {
+    return { ok: false, accepted: false, error: 'pane_unavailable' };
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (wc.isDestroyed()) {
+      return { ok: false, accepted: false, error: 'pane_destroyed' };
+    }
+
+    const snapshot = await wc.executeJavaScript(
+      `(() => {
+        const marker = ${JSON.stringify(marker)};
+        const userMessageId = ${JSON.stringify(userMessageId)};
+        const baselineAssistantMessageId = ${JSON.stringify(baselineAssistantMessageId)};
+        const isStopControl = ${isGenerationStopControl.toString()};
+        const allMessages = [...document.querySelectorAll('[data-message-author-role]')];
+        const assistants = allMessages.filter(node =>
+          node.getAttribute('data-message-author-role') === 'assistant'
+        );
+        if (!assistants.length) return { found:false };
+
+        let candidate = null;
+        let linkedUserMessageId = null;
+
+        if (userMessageId) {
+          const userIndex = allMessages.findIndex(node =>
+            node.getAttribute('data-message-author-role') === 'user'
+            && node.getAttribute('data-message-id') === userMessageId
+          );
+          if (userIndex < 0) return { found:false, error:'delivered_user_message_not_found' };
+          linkedUserMessageId = userMessageId;
+          const userNode = allMessages[userIndex];
+          const turns = [...document.querySelectorAll('section[data-testid^="conversation-turn-"]')];
+          const userTurn = userNode.closest('section[data-testid^="conversation-turn-"]');
+          const userTurnIndex = turns.indexOf(userTurn);
+          const nextTurn = userTurnIndex >= 0 ? turns[userTurnIndex + 1] : null;
+          const nextTurnText = String(nextTurn?.innerText || nextTurn?.textContent || '').trim();
+          const nextTurnHasUser = Boolean(nextTurn?.querySelector('[data-message-author-role="user"]'));
+          const nextTurnHasAssistant = Boolean(nextTurn?.querySelector('[data-message-author-role="assistant"]'));
+          const interruptionButton = nextTurn
+            ? [...nextTurn.querySelectorAll('button')].find(button => {
+                const text = String(button.innerText || button.textContent || '').trim();
+                return /^(racioc[ií]nio interrompido|reasoning interrupted|generation interrupted|response interrupted)$/i.test(text);
+              })
+            : null;
+          if (nextTurn && !nextTurnHasUser && !nextTurnHasAssistant && interruptionButton) {
+            return {
+              found:false,
+              interrupted:true,
+              linkedUserMessageId,
+              interruptionText:nextTurnText.slice(0, 500),
+              url:location.href,
+            };
+          }
+          for (let i = userIndex + 1; i < allMessages.length; i += 1) {
+            const role = allMessages[i].getAttribute('data-message-author-role');
+            if (role === 'user') break;
+            if (role === 'assistant') {
+              candidate = allMessages[i];
+              break;
+            }
+          }
+        } else if (baselineAssistantMessageId) {
+          const baselineIndex = assistants.findIndex(node =>
+            node.getAttribute('data-message-id') === baselineAssistantMessageId
+          );
+          if (baselineIndex >= 0 && baselineIndex < assistants.length - 1) {
+            candidate = assistants[assistants.length - 1];
+          } else if (baselineIndex < 0) {
+            const last = assistants[assistants.length - 1];
+            const lastId = last?.getAttribute('data-message-id') || null;
+            if (lastId && lastId !== baselineAssistantMessageId) candidate = last;
+          }
+        } else {
+          candidate = assistants[assistants.length - 1];
+        }
+
+        if (!candidate) return { found:false };
+        const assistantMessageId = candidate.getAttribute('data-message-id') || null;
+        if (!assistantMessageId) return { found:false };
+
+        const text = String(candidate.innerText || candidate.textContent || '');
+        const stopControl = [...document.querySelectorAll('button')].find(button => {
+          const rect = button.getBoundingClientRect();
+          if (!(rect.width > 0 && rect.height > 0)) return false;
+          return isStopControl({
+            ariaLabel: button.getAttribute('aria-label'),
+            testId: button.getAttribute('data-testid'),
+            title: button.title,
+            text: button.innerText,
+          });
+        });
+
+        return {
+          found:true,
+          assistantMessageId,
+          linkedUserMessageId,
+          markerObserved:Boolean(marker && text.includes(marker)),
+          generationActive:Boolean(stopControl),
+          textLength:text.length,
+          url:location.href,
+        };
+      })()`,
+      true,
+    ).catch(() => null);
+
+    if (snapshot?.interrupted) {
+      return {
+        ok: false,
+        accepted: false,
+        interrupted: true,
+        error: 'assistant_interrupted',
+        terminalSignal: 'assistant_interrupted',
+        linkedUserMessageId: snapshot.linkedUserMessageId ?? userMessageId ?? null,
+        interruptionText: snapshot.interruptionText ?? null,
+        url: snapshot.url ?? wc.getURL(),
+      };
+    }
+
+    if (snapshot?.found && snapshot?.assistantMessageId) {
+      return {
+        ok: true,
+        accepted: true,
+        assistantMessageId: snapshot.assistantMessageId,
+        linkedUserMessageId: snapshot.linkedUserMessageId ?? userMessageId ?? null,
+        baselineAssistantMessageId,
+        markerObserved: Boolean(snapshot.markerObserved),
+        generationActive: Boolean(snapshot.generationActive),
+        url: snapshot.url ?? wc.getURL(),
+      };
+    }
+
+    await sleep(250);
+  }
+
+  const generationActive = await wc.executeJavaScript(`(() => {
+    const isStopControl = ${isGenerationStopControl.toString()};
+    return [...document.querySelectorAll('button')].some(button => {
+      const rect = button.getBoundingClientRect();
+      if (!(rect.width > 0 && rect.height > 0)) return false;
+      return isStopControl({
+        ariaLabel: button.getAttribute('aria-label'),
+        testId: button.getAttribute('data-testid'),
+        title: button.title,
+        text: button.innerText,
+      });
+    });
+  })()`, true).catch(() => false);
+
+  return {
+    ok: false,
+    accepted: false,
+    error: 'assistant_start_timeout',
+    generationActive: Boolean(generationActive),
+    linkedUserMessageId: userMessageId ?? null,
+    baselineAssistantMessageId,
+    url: wc.getURL(),
+  };
+}
+
+async function waitForAssistantResult(
+  pane,
+  {
+    marker = null,
+    assistantMessageId = null,
+    userMessageId = null,
+    expectedConversationUrl = null,
+  },
+  timeoutMs = 120000,
+) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) {
+    return { ok: false, generationFinished: false, terminalSignal: 'pane_unavailable' };
+  }
+
+  let expectedConversationId = null;
+  try {
+    const parsedExpected = new URL(expectedConversationUrl);
+    expectedConversationId = parsedExpected.pathname.match(/\/c\/([^/]+)/)?.[1] ?? null;
+  } catch {}
+
+  const deadline = Date.now() + timeoutMs;
+  let lastMessageId = null;
+  let lastText = '';
+  let stableSince = 0;
+  let anchorMissingSince = 0;
+
+  while (Date.now() < deadline) {
+    if (wc.isDestroyed()) {
+      return { ok: false, generationFinished: false, terminalSignal: 'pane_destroyed' };
+    }
+
+    if (expectedConversationId && !wc.isLoading()) {
+      const currentUrl = wc.getURL();
+      let currentConversationId = null;
+      try {
+        currentConversationId = new URL(currentUrl).pathname.match(/\/c\/([^/]+)/)?.[1] ?? null;
+      } catch {}
+      if (currentConversationId !== expectedConversationId) {
+        return {
+          ok: false,
+          generationFinished: false,
+          generationActive: null,
+          terminalSignal: 'conversation_changed',
+          expectedConversationId,
+          currentConversationId,
+          assistantMessageId: lastMessageId ?? assistantMessageId ?? null,
+          linkedUserMessageId: userMessageId ?? null,
+          url: currentUrl,
+          stableForMs: 0,
+          finalActionsObserved: false,
+        };
+      }
+    }
+
+    const snapshot = await wc.executeJavaScript(
+      `(() => {
+        const marker = ${JSON.stringify(marker)};
+        const acceptedAssistantMessageId = ${JSON.stringify(assistantMessageId)};
+        const userMessageId = ${JSON.stringify(userMessageId)};
+        const isStopControl = ${isGenerationStopControl.toString()};
+        const targetGenerationActive = ${isTargetGenerationActive.toString()};
+        const visible = (el) => {
+          if (!el) return false;
+          const rect = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return rect.width > 0 && rect.height > 0
+            && style.display !== 'none'
+            && style.visibility !== 'hidden';
+        };
+        const allMessages = [...document.querySelectorAll('[data-message-author-role]')];
+        const assistants = allMessages.filter(node =>
+          node.getAttribute('data-message-author-role') === 'assistant'
+        );
+
+        let message = null;
+        let linkedUserMessageId = null;
+
+        if (userMessageId) {
+          const userIndex = allMessages.findIndex(node =>
+            node.getAttribute('data-message-author-role') === 'user'
+            && node.getAttribute('data-message-id') === userMessageId
+          );
+          if (userIndex < 0) {
+            return {
+              found: false,
+              anchorMissing: true,
+              generationActive: null,
+              finalActionsObserved: false,
+              linkedUserMessageId: userMessageId,
+              url: location.href,
+            };
+          }
+          if (userIndex >= 0) {
+            linkedUserMessageId = userMessageId;
+            const userNode = allMessages[userIndex];
+            const turns = [...document.querySelectorAll('section[data-testid^="conversation-turn-"]')];
+            const userTurn = userNode.closest('section[data-testid^="conversation-turn-"]');
+            const userTurnIndex = turns.indexOf(userTurn);
+            const nextTurn = userTurnIndex >= 0 ? turns[userTurnIndex + 1] : null;
+            const nextTurnText = String(nextTurn?.innerText || nextTurn?.textContent || '').trim();
+            const nextTurnHasUser = Boolean(nextTurn?.querySelector('[data-message-author-role="user"]'));
+            const nextTurnHasAssistant = Boolean(nextTurn?.querySelector('[data-message-author-role="assistant"]'));
+            const interruptionButton = nextTurn
+              ? [...nextTurn.querySelectorAll('button')].find(button => {
+                  const text = String(button.innerText || button.textContent || '').trim();
+                  return /^(racioc[ií]nio interrompido|reasoning interrupted|generation interrupted|response interrupted)$/i.test(text);
+                })
+              : null;
+            if (nextTurn && !nextTurnHasUser && !nextTurnHasAssistant && interruptionButton) {
+              return {
+                found: false,
+                interrupted: true,
+                generationActive: false,
+                finalActionsObserved: false,
+                linkedUserMessageId,
+                interruptionText: nextTurnText.slice(0, 500),
+                url: location.href,
+              };
+            }
+            for (let i = userIndex + 1; i < allMessages.length; i += 1) {
+              const role = allMessages[i].getAttribute('data-message-author-role');
+              if (role === 'user') break;
+              if (role === 'assistant') {
+                message = allMessages[i];
+                break;
+              }
+            }
+          }
+        }
+
+        if (!message && acceptedAssistantMessageId) {
+          message = assistants.find(node =>
+            node.getAttribute('data-message-id') === acceptedAssistantMessageId
+          ) || null;
+        }
+
+        if (!message && !acceptedAssistantMessageId) {
+          message = [...assistants].reverse().find(node =>
+            marker && String(node.innerText || node.textContent || '').includes(marker)
+          ) || null;
+        }
+
+        if (!message) {
+          return {
+            found: false,
+            generationActive: true,
+            finalActionsObserved: false,
+            linkedUserMessageId,
+          };
+        }
+
+        const text = String(message.innerText || message.textContent || '');
+        const currentAssistantMessageId = message.getAttribute('data-message-id') || null;
+        const assistantIdMigratedFrom = acceptedAssistantMessageId
+          && currentAssistantMessageId
+          && currentAssistantMessageId !== acceptedAssistantMessageId
+          && String(acceptedAssistantMessageId).startsWith('request-placeholder-')
+          ? acceptedAssistantMessageId
+          : null;
+        const messageIndex = allMessages.indexOf(message);
+        const laterUserMessageObserved = messageIndex >= 0
+          && allMessages.slice(messageIndex + 1).some(node =>
+            node.getAttribute('data-message-author-role') === 'user'
+          );
+        const stopControl = [...document.querySelectorAll('button')].find(button => {
+          if (!visible(button)) return false;
+          return isStopControl({
+            ariaLabel: button.getAttribute('aria-label'),
+            testId: button.getAttribute('data-testid'),
+            title: button.title,
+            text: button.innerText,
+          });
+        });
+
+        const turn = message.closest('section[data-testid^="conversation-turn-"]');
+        const turnText = String(turn?.innerText || turn?.textContent || '').trim();
+        const turnInterruptionButton = turn
+          ? [...turn.querySelectorAll('button')].find(button => {
+              const text = String(button.innerText || button.textContent || '').trim();
+              return /^(racioc[ií]nio interrompido|reasoning interrupted|generation interrupted|response interrupted)$/i.test(text);
+            })
+          : null;
+        const interrupted = Boolean(
+          turnInterruptionButton
+          && !turn?.querySelector('[data-message-author-role="assistant"]')
+          && !turn?.querySelector('[data-message-author-role="user"]')
+        );
+        const finalActionButtons = turn
+          ? [...turn.querySelectorAll('button')].filter(visible)
+          : [];
+        const finalActionsObserved = finalActionButtons.some(button => {
+          const label = String(
+            button.getAttribute('aria-label')
+            || button.getAttribute('data-testid')
+            || button.title
+            || button.innerText
+            || ''
+          ).toLowerCase();
+          return label.includes('copy')
+            || label.includes('copiar')
+            || label.includes('copy-turn-action-button')
+            || label.includes('add to library')
+            || label.includes('adicionar à biblioteca')
+            || label.includes('open editor')
+            || label.includes('abrir editor');
+        });
+
+        return {
+          found: true,
+          text,
+          assistantMessageId: currentAssistantMessageId,
+          linkedUserMessageId,
+          assistantIdMigratedFrom,
+          interrupted,
+          interruptionText: interrupted ? turnText.slice(0, 500) : null,
+          generationActive: targetGenerationActive({
+            stopControlPresent: Boolean(stopControl),
+            laterUserMessageObserved,
+          }),
+          laterUserMessageObserved,
+          finalActionsObserved,
+          url: location.href,
+        };
+      })()`,
+      true,
+    ).catch(() => null);
+
+    if (snapshot?.interrupted) {
+      return {
+        ok: false,
+        interrupted: true,
+        generationFinished: false,
+        generationActive: false,
+        terminalSignal: 'assistant_interrupted',
+        linkedUserMessageId: snapshot.linkedUserMessageId ?? userMessageId ?? null,
+        interruptionText: snapshot.interruptionText ?? null,
+        url: snapshot.url ?? wc.getURL(),
+      };
+    }
+
+    if (snapshot?.interrupted) {
+      return {
+        ok: false,
+        interrupted: true,
+        generationFinished: false,
+        generationActive: false,
+        terminalSignal: 'assistant_interrupted',
+        assistantMessageId: snapshot.assistantMessageId ?? assistantMessageId ?? null,
+        linkedUserMessageId: snapshot.linkedUserMessageId ?? userMessageId ?? null,
+        interruptionText: snapshot.interruptionText ?? null,
+        url: snapshot.url ?? wc.getURL(),
+      };
+    }
+
+    if (!snapshot?.found) {
+      if (snapshot?.anchorMissing) {
+        if (!anchorMissingSince) anchorMissingSince = Date.now();
+        if (Date.now() - anchorMissingSince >= 5000) {
+          return {
+            ok: false,
+            generationFinished: false,
+            generationActive: snapshot?.generationActive ?? null,
+            terminalSignal: 'conversation_anchor_lost',
+            assistantMessageId: lastMessageId ?? assistantMessageId ?? null,
+            linkedUserMessageId: userMessageId ?? null,
+            url: snapshot?.url ?? wc.getURL(),
+            stableForMs: 0,
+            finalActionsObserved: false,
+          };
+        }
+      } else {
+        anchorMissingSince = 0;
+      }
+      lastMessageId = null;
+      lastText = '';
+      stableSince = 0;
+      await sleep(400);
+      continue;
+    }
+    anchorMissingSince = 0;
+
+    const now = Date.now();
+    if (snapshot.assistantMessageId === lastMessageId && snapshot.text === lastText) {
+      if (!stableSince) stableSince = now;
+    } else {
+      lastMessageId = snapshot.assistantMessageId;
+      lastText = snapshot.text;
+      stableSince = now;
+    }
+
+    const stableForMs = Math.max(0, now - stableSince);
+    const normalizedText = String(snapshot.text || '').trim();
+    const definitiveAssistantId = Boolean(snapshot.assistantMessageId)
+      && !String(snapshot.assistantMessageId).startsWith('request-placeholder-');
+    const transientText = /^(pensando|thinking)(?:\.{0,3})?$/i.test(normalizedText)
+      || /^(racioc[ií]nio interrompido|reasoning interrupted|generation interrupted|response interrupted)$/i.test(normalizedText);
+    const terminal = !snapshot.generationActive
+      && !snapshot.interrupted
+      && snapshot.finalActionsObserved
+      && definitiveAssistantId
+      && !transientText
+      && stableForMs >= 1200;
+
+    if (terminal) {
+      let conversationId = null;
+      try {
+        const parsed = new URL(snapshot.url);
+        const match = parsed.pathname.match(/\/c\/([^/]+)/);
+        conversationId = match?.[1] ?? null;
+      } catch {}
+
+      if (!conversationId) {
+        return {
+          ok: false,
+          generationFinished: false,
+          generationActive: false,
+          terminalSignal: 'conversation_identity_missing',
+          assistantMessageId: snapshot.assistantMessageId,
+          text: snapshot.text,
+          url: snapshot.url,
+          stableForMs,
+          finalActionsObserved: snapshot.finalActionsObserved,
+        };
+      }
+
+      return {
+        ok: true,
+        generationFinished: true,
+        generationActive: false,
+        terminalSignal: 'ui_generation_inactive_with_final_actions',
+        assistantMessageId: snapshot.assistantMessageId,
+        linkedUserMessageId: snapshot.linkedUserMessageId ?? userMessageId ?? null,
+        assistantIdMigratedFrom: snapshot.assistantIdMigratedFrom ?? null,
+        conversationId,
+        text: snapshot.text,
+        url: snapshot.url,
+        stableForMs,
+        finalActionsObserved: true,
+      };
+    }
+
+    await sleep(400);
+  }
+
+  return {
+    ok: false,
+    generationFinished: false,
+    generationActive: null,
+    terminalSignal: 'result_timeout',
+    assistantMessageId: lastMessageId,
+    text: lastText,
+    url: wc.getURL(),
+    stableForMs: 0,
+    finalActionsObserved: false,
+  };
+}
+
+function createPaneAgentIdentityRuntime() {
+  const broker = {
+    listAgents: async () => {
+      const result = await runAgentSessionTool(['list']);
+      return Array.isArray(result?.agents) ? result.agents : [];
+    },
+    showSession: async (sessionId) => runAgentSessionTool([
+      'show',
+      '--session',
+      sessionId,
+    ]),
+    createSession: async ({ agentId, missionId, objective, surface }) => {
+      const args = ['create', '--agent', agentId, '--surface', surface || 'dual-browser-pane'];
+      if (missionId) args.push('--mission', missionId);
+      if (objective) args.push('--objective', objective);
+      return runAgentSessionTool(args);
+    },
+    markOpen: async (sessionId, chatUrl) => runAgentSessionTool([
+      'mark-open',
+      '--session',
+      sessionId,
+      ...(chatUrl ? ['--chat-url', chatUrl] : []),
+    ]),
+  };
+
+  const surface = {
+    getUrl: (pane) => {
+      const wc = getPane(pane);
+      return wc && !wc.isDestroyed() ? wc.getURL() : null;
+    },
+    freshConversation: freshAgentConversation,
+    sendMessage: async (pane, message) => {
+      if (!bridge) return { ok: false, error: 'bridge_unavailable' };
+      const result = await bridge.sendMessage(pane, message);
+      if (!result?.ok) return result;
+      const url = await waitForConversationUrl(pane);
+      return { ...result, url };
+    },
+    waitForAssistantMarker,
+    waitForAssistantStart,
+    waitForAssistantResult,
+  };
+
+  return new PaneAgentRuntime({
+    instanceId: instance.id,
+    missionId: PANE_AGENT_MISSION_ID,
+    broker,
+    surface,
+    agentBindings,
+    loadState: loadPaneAgentState,
+    saveState: savePaneAgentState,
+    startupReady: false,
+    onEvent: (event) => bridge?.publishLiveEvent(event),
+  });
 }
 
 function publicAgentSession(record) {
@@ -738,7 +1421,7 @@ function createWindow() {
     ...(savedBounds ?? { width: 1500, height: 920 }),
     minWidth: 900,
     minHeight: 620,
-    title: `MCF Dual Browser Cockpit · ${instance.id}`,
+    title: `MCF Dual Browser Cockpit · ${instance.id} · ${instance.agentProfile}`,
     backgroundColor: '#090d12',
     show: false,
     autoHideMenuBar: true,
@@ -760,19 +1443,79 @@ function createWindow() {
   const captureDir = path.join(app.getPath('pictures'), 'MCF-Cockpit-Captures');
   const uploadDir = path.join(app.getPath('userData'), 'approved-uploads');
   mkdirSync(uploadDir, { recursive: true });
+
+  paneAgentRuntime = createPaneAgentIdentityRuntime();
   bridge = new LocalAgentBridge({
     getWorkspaceWebContents: activeWorkspaceWebContents,
+    getPaneWebContents: getPane,
     captureDir,
     instanceId: instance.id,
+    agentProfile: instance.agentProfile,
     uploadDir,
     captureWorkspace,
     openAgentSession,
     listAgentSessions,
+    getAgentIdentities: async () => paneAgentRuntime?.getIdentities() ?? [],
+    bootstrapAgentIdentities: async (input) => {
+      if (!paneAgentRuntime) return { ok: false, error: 'agent_identity_runtime_unavailable' };
+      return paneAgentRuntime.bootstrap(input ?? {});
+    },
+    dispatchAgentMission: async (input) => {
+      if (!paneAgentRuntime) return { ok: false, error: 'agent_identity_runtime_unavailable' };
+      return paneAgentRuntime.dispatchMission(input ?? {});
+    },
+    listAgentReceipts: async () => paneAgentRuntime?.listReceipts() ?? [],
+    listAgentMissions: async () => paneAgentRuntime?.listMissions() ?? [],
+    getAgentMission: async (envelopeId) => paneAgentRuntime?.getMission(envelopeId) ?? null,
+    getParentAgentMissionStatus: async (missionId) => (
+      paneAgentRuntime?.getParentMissionStatus(missionId)
+      ?? { parentMissionId: missionId, required: 0, completed: 0, active: 0, closable: false, blockers: [] }
+    ),
     onEvent: emitBridgeEvent,
   });
 
   bridge.start()
-    .then((state) => persistBridgeState(state))
+    .then(async (state) => {
+      persistBridgeState(state);
+      await sleep(1200);
+      const bootstrap = await paneAgentRuntime?.bootstrap().catch((error) => ({
+        ok: false,
+        error: error.message,
+      }));
+      if (bootstrap?.ok) {
+        emitBridgeEvent({ level: 'ok', message: 'MCF Agent Identity: Emily e Sofia READY.' });
+      } else {
+        emitBridgeEvent({
+          level: 'error',
+          message: 'MCF Agent Identity: bootstrap incompleto — ' + (bootstrap?.error || 'verificar /v1/agents'),
+        });
+      }
+
+      try {
+        const recovery = await paneAgentRuntime?.recoverPersistedMissions();
+        if (recovery?.recovered?.length) {
+          const completed = recovery.recovered.filter(item => item.state === 'COMPLETED').length;
+          const unresolved = recovery.recovered.length - completed;
+          emitBridgeEvent({
+            level: unresolved ? 'error' : 'ok',
+            message: 'MCF Mission Recovery: '
+              + completed + ' concluída(s), '
+              + unresolved + ' não verificada(s).',
+          });
+        }
+        paneAgentRuntime?.markStartupReady();
+        emitBridgeEvent({
+          level: 'ok',
+          message: 'MCF Agent Runtime: startup/recovery concluído — missões liberadas.',
+        });
+      } catch (error) {
+        paneAgentRuntime?.markStartupInitializing();
+        emitBridgeEvent({
+          level: 'error',
+          message: 'MCF Mission Recovery falhou: ' + error.message,
+        });
+      }
+    })
     .catch((error) => {
       persistBridgeState(null);
       emitBridgeEvent({ level: 'error', message: 'Agent Bridge não iniciou: ' + error.message });
@@ -796,6 +1539,7 @@ function createWindow() {
     const state = await bridge?.stop().catch(() => null);
     persistBridgeState(state);
     bridge = null;
+    paneAgentRuntime = null;
     chatView = null;
     workspaceView = null;
     workspaceAuxWindow = null;

@@ -1,0 +1,215 @@
+{
+  "schema": "mcf-live-smoke-exact/v1",
+  "status": "PASS",
+  "candidate": {
+    "version": "0.6.0",
+    "gitSha": "c11e3984fc76a19780593d35eaabc7f903193322",
+    "appImageSha256": "ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951"
+  },
+  "parentMissionId": "MCF-LIVE-AGENT-COMMS-001-LIVE-SMOKE-R1",
+  "instances": {
+    "notebook": {
+      "instanceId": "notebook",
+      "port": 46729,
+      "version": "0.6.0",
+      "agentProfile": "audit-architecture",
+      "pid": 1542597
+    },
+    "notebook-team2": {
+      "instanceId": "notebook-team2",
+      "port": 47831,
+      "version": "0.6.0",
+      "agentProfile": "debug-engineering",
+      "pid": 1542598
+    }
+  },
+  "results": {
+    "MCF-LIVE-SMOKE-EMILY-R1": {
+      "instanceId": "notebook",
+      "agentId": "Emily",
+      "envelopeId": "b3ef2c38-db2c-4ef8-b83c-0d4670e424d6",
+      "state": "COMPLETED",
+      "resultSha256": "da133c4642590486d68515951a05b1dbf525673a3c8f6c9c50c7e58ba83f945b",
+      "assistantMessageId": "605ae94f-c53f-4c2a-8381-d4fd322c9a5d",
+      "conversationId": "6ab4c08e-3a40-83e9-bfeb-ac89cf21dfbc",
+      "linkedUserMessageId": "cfb3b453-dee4-478c-9e53-430210704ee6",
+      "resultCapturedEventId": "305a0e27-db08-499a-8b48-813eaab9d0cd:78",
+      "completedEventId": "305a0e27-db08-499a-8b48-813eaab9d0cd:80",
+      "bodyAvailableOnlyAtCompleted": true,
+      "textPreview": "MCF_MISSION_ACCEPTED envelope_id=b3ef2c38-db2c-4ef8-b83c-0d4670e424d6 agent_id=Emily\n\nEnvelope observado: mcf-mission-envelope/v1, envelope b3ef2c38-db2c-4ef8-b83c-0d4670e424d6.\n\nCorrelação observada: missão MCF-LIVE-SMOKE-EMILY-R1, parent MCF-LIVE-AGENT-COMMS-001-LIVE-SMOKE-R1, required=true.\n\nIdentidade observada: Emily, papel Auditoria Independente, pane chat, contrato docs/agentes/EMILY.md.\n\nSessão observada: session 08473b19-9fe0-4662-8a8b-3fcc1ac3cb4c, trace 67088c7c-6219-4020-be14-685705d"
+    },
+    "MCF-LIVE-SMOKE-SOFIA-R1": {
+      "instanceId": "notebook",
+      "agentId": "Sofia",
+      "envelopeId": "0b40d69f-2f2e-4de8-97f5-a8f2b5f0b662",
+      "state": "COMPLETED",
+      "resultSha256": "18bef27686f6b8d06745939e0b70187be1c006d36fa7c491b6517b6b528a5409",
+      "assistantMessageId": "59fe75c6-050f-4b17-aecf-61c508d92adf",
+      "conversationId": "6ab4c062-ad7c-83e9-ac2b-23a256bd521c",
+      "linkedUserMessageId": "1d7c93ee-18ed-4473-afc5-ddd531fba1b7",
+      "resultCapturedEventId": "305a0e27-db08-499a-8b48-813eaab9d0cd:59",
+      "completedEventId": "305a0e27-db08-499a-8b48-813eaab9d0cd:61",
+      "bodyAvailableOnlyAtCompleted": true,
+      "textPreview": "Lifecycle: preserva QUEUED → DELIVERED → ACCEPTED → WORKING → RESULT_CAPTURED → COMPLETED; geração ativa não fecha missão.\n\nCorrelação: eventos devem permanecer ligados a instance/pane/agent/session/trace/mission/envelope/message.\n\nReplay: reconexão usa cursor/event ID bounded; eventos antigos fora da janela exigem ressincronização por snapshot.\n\nIsolamento: nenhuma emissão pode cruzar entre instâncias; identidade e estado permanecem scoped por instanceId.\n\nTerminalidade: resultado só é terminal"
+    },
+    "MCF-LIVE-SMOKE-PATRICIA-R1": {
+      "instanceId": "notebook-team2",
+      "agentId": "Patrícia",
+      "envelopeId": "9b5f9ebf-e2fc-496f-83d7-57c38a67ebad",
+      "state": "COMPLETED",
+      "resultSha256": "589cd31a8fbc8b9f2a1a0e47f73703de2408016776d9856f51144cd591946749",
+      "assistantMessageId": "ab04cbe6-e1da-4aad-9d45-1929804ac6f5",
+      "conversationId": "6ab50f25-91c4-83e9-8224-9b8408812023",
+      "linkedUserMessageId": "4dfb02ac-4910-40f8-b21c-2e234385ace8",
+      "resultCapturedEventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:47",
+      "completedEventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:49",
+      "bodyAvailableOnlyAtCompleted": true,
+      "textPreview": "MCF_MISSION_ACCEPTED envelope_id=9b5f9ebf-e2fc-496f-83d7-57c38a67ebad agent_id=Patrícia\n\nPatrícia — Debugging e Análise de Falhas. Smoke alinhado aos critérios da MCF Issue #360, sem alteração de código.\n\nColeta: risco de perder resposta concluída quando a observação DOM/WebContents ocorre tarde, falha ou perde transição entre geração e resultado.\n\nReplay: deve recuperar eventos recentes após reconexão sem reaplicar logicamente eventos já processados.\n\nCursor: cursor inválido, expirado ou avança"
+    },
+    "MCF-LIVE-SMOKE-RAFAEL-R1": {
+      "instanceId": "notebook-team2",
+      "agentId": "Rafael",
+      "envelopeId": "39a982d1-65c8-43fd-9b96-ce7ce2d93579",
+      "state": "COMPLETED",
+      "resultSha256": "e3d8d8904506b7d5634115b38a2c67c039a4d68bc92244371e01a9215543e05b",
+      "assistantMessageId": "f6880f66-0d99-4d54-b56a-19a1b18035d5",
+      "conversationId": "6ab50853-1064-83e9-a885-8e7d8fee15a1",
+      "linkedUserMessageId": "a3382a86-d788-4b15-9e40-7dbe5486be16",
+      "resultCapturedEventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:62",
+      "completedEventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:64",
+      "bodyAvailableOnlyAtCompleted": true,
+      "textPreview": "MCF_MISSION_ACCEPTED envelope_id=39a982d1-65c8-43fd-9b96-ce7ce2d93579 agent_id=Rafael\n\nRevisão de engenharia do candidate 0.6.0 / c11e3984fc76a19780593d35eaabc7f903193322:\n\nSSE: journal semântico local + snapshot/stream read-only; testes do candidate cobrem SSE e isolamento.\n\nAuth: Bearer + escopo exato de instância, preservando boundaries fail-closed de Host/Origin; sem token em query.\n\nCorrelação: eventos vinculam instância, pane, agente, sessão/trace, missão/envelope/execution e IDs de conver"
+    }
+  },
+  "parents": {
+    "notebook": {
+      "parentMissionId": "MCF-LIVE-AGENT-COMMS-001-LIVE-SMOKE-R1",
+      "required": 2,
+      "completed": 2,
+      "active": 0,
+      "attempts": 2,
+      "closable": true,
+      "blockers": []
+    },
+    "notebook-team2": {
+      "parentMissionId": "MCF-LIVE-AGENT-COMMS-001-LIVE-SMOKE-R1",
+      "required": 2,
+      "completed": 2,
+      "active": 0,
+      "attempts": 2,
+      "closable": true,
+      "blockers": []
+    }
+  },
+  "replay": {
+    "status": "PASS",
+    "instanceId": "notebook-team2",
+    "bootId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4",
+    "cursorBeforeDisconnect": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:65",
+    "initialConnectedThenDisconnected": true,
+    "reconnectChannelReady": {
+      "schema": "mcf-live-agent-event-snapshot/v1",
+      "instanceId": "notebook-team2",
+      "agentProfile": "debug-engineering",
+      "bootId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4",
+      "requestedAfter": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:65",
+      "oldestEventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:1",
+      "highWatermarkEventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:80",
+      "resetRequired": false,
+      "resetReason": null,
+      "replayCount": 15
+    },
+    "envelopeId": "bebfa9f4-901f-43ff-ae4d-4f6fc1d34037",
+    "replayedMissionEvents": [
+      {
+        "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:66",
+        "type": "MISSION_STATE",
+        "state": "QUEUED",
+        "bodyAvailable": null,
+        "resultSha256": null
+      },
+      {
+        "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:68",
+        "type": "MISSION_STATE",
+        "state": "DELIVERED",
+        "bodyAvailable": null,
+        "resultSha256": null
+      },
+      {
+        "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:70",
+        "type": "MISSION_STATE",
+        "state": "DELIVERED",
+        "bodyAvailable": null,
+        "resultSha256": null
+      },
+      {
+        "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:71",
+        "type": "MISSION_STATE",
+        "state": "DELIVERED",
+        "bodyAvailable": null,
+        "resultSha256": null
+      },
+      {
+        "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:72",
+        "type": "MISSION_STATE",
+        "state": "ACCEPTED",
+        "bodyAvailable": null,
+        "resultSha256": null
+      },
+      {
+        "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:74",
+        "type": "MISSION_STATE",
+        "state": "WORKING",
+        "bodyAvailable": null,
+        "resultSha256": null
+      },
+      {
+        "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:76",
+        "type": "MISSION_STATE",
+        "state": "WORKING",
+        "bodyAvailable": null,
+        "resultSha256": null
+      },
+      {
+        "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:77",
+        "type": "MISSION_STATE",
+        "state": "RESULT_CAPTURED",
+        "bodyAvailable": false,
+        "resultSha256": "ce9414dd04fe18993f14c6ee66a2f61988d11ff236f73aba807c4e6840e636ad"
+      },
+      {
+        "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:79",
+        "type": "MISSION_STATE",
+        "state": "COMPLETED",
+        "bodyAvailable": true,
+        "resultSha256": "ce9414dd04fe18993f14c6ee66a2f61988d11ff236f73aba807c4e6840e636ad"
+      }
+    ]
+  },
+  "captures": {
+    "notebook": {
+      "chat": {
+        "path": "/home/leo/mcf-workspaces/live-agent-comms-20260924/artifacts/phases/PHASE-01-LIVE-AGENT-COMMS/visual/exact-c11e398-notebook-chat.png",
+        "sha256": "4dd301f1c186e108586c075313920001320cd5eaa89f307d2022881f6526dd9d",
+        "bytes": 62194
+      },
+      "workspace": {
+        "path": "/home/leo/mcf-workspaces/live-agent-comms-20260924/artifacts/phases/PHASE-01-LIVE-AGENT-COMMS/visual/exact-c11e398-notebook-workspace.png",
+        "sha256": "70e5759af40442e1371c4a37e8343207871dd6eb2725fffd302727667aed9522",
+        "bytes": 77892
+      }
+    },
+    "notebook-team2": {
+      "chat": {
+        "path": "/home/leo/mcf-workspaces/live-agent-comms-20260924/artifacts/phases/PHASE-01-LIVE-AGENT-COMMS/visual/exact-c11e398-notebook-team2-chat.png",
+        "sha256": "0d6772c5a4cc7ea0164276f78803399c7ae5c4c507a4a198788508c99cec834a",
+        "bytes": 96525
+      },
+      "workspace": {
+        "path": "/home/leo/mcf-workspaces/live-agent-comms-20260924/artifacts/phases/PHASE-01-LIVE-AGENT-COMMS/visual/exact-c11e398-notebook-team2-workspace.png",
+        "sha256": "c2a448dbb048a099d4d95cb2207fee5ac748689ab98c4a8f4698dfab637a2fc9",
+        "bytes": 48282
+      }
+    }
+  }
+}

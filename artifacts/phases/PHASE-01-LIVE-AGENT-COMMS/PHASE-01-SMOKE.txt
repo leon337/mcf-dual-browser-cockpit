@@ -1,0 +1,71 @@
+MCF-LIVE-AGENT-COMMS-001 — Real smoke (EXACT RELEASE)
+STATUS: PASS
+
+Release code SHA:
+c11e3984fc76a19780593d35eaabc7f903193322
+
+Version:
+0.6.0
+
+AppImage SHA-256:
+ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951
+
+Production instances:
+notebook = 0.6.0 / audit-architecture / exact AppImage / Bridge healthy
+notebook-team2 = 0.6.0 / debug-engineering / exact AppImage / Bridge healthy
+
+Four-agent smoke parent:
+MCF-LIVE-AGENT-COMMS-001-LIVE-SMOKE-R1
+
+notebook parent:
+required=2 completed=2 active=0 closable=true
+
+notebook-team2 parent:
+required=2 completed=2 active=0 closable=true
+
+Emily:
+mission=MCF-LIVE-SMOKE-EMILY-R1
+envelope=b3ef2c38-db2c-4ef8-b83c-0d4670e424d6
+resultSha256=da133c4642590486d68515951a05b1dbf525673a3c8f6c9c50c7e58ba83f945b
+COMPLETED event=305a0e27-db08-499a-8b48-813eaab9d0cd:80
+
+Sofia:
+mission=MCF-LIVE-SMOKE-SOFIA-R1
+envelope=0b40d69f-2f2e-4de8-97f5-a8f2b5f0b662
+resultSha256=18bef27686f6b8d06745939e0b70187be1c006d36fa7c491b6517b6b528a5409
+COMPLETED event=305a0e27-db08-499a-8b48-813eaab9d0cd:61
+
+Patrícia:
+mission=MCF-LIVE-SMOKE-PATRICIA-R1
+envelope=9b5f9ebf-e2fc-496f-83d7-57c38a67ebad
+resultSha256=589cd31a8fbc8b9f2a1a0e47f73703de2408016776d9856f51144cd591946749
+COMPLETED event=25dfbc01-b745-4f1c-9881-4be1d0540cb4:49
+
+Rafael:
+mission=MCF-LIVE-SMOKE-RAFAEL-R1
+envelope=39a982d1-65c8-43fd-9b96-ce7ce2d93579
+resultSha256=e3d8d8904506b7d5634115b38a2c67c039a4d68bc92244371e01a9215543e05b
+COMPLETED event=25dfbc01-b745-4f1c-9881-4be1d0540cb4:64
+
+Terminal body gate:
+RESULT_CAPTURED bodyAvailable=false for all four.
+COMPLETED bodyAvailable=true for all four.
+COMPLETED resultSha256 matches persisted mission result.
+
+Deliberate disconnect/reconnect proof:
+instance=notebook-team2
+cursorBeforeDisconnect=25dfbc01-b745-4f1c-9881-4be1d0540cb4:65
+initialConnectedThenDisconnected=true
+reconnect replayCount=15
+resetRequired=false
+probe envelope=bebfa9f4-901f-43ff-ae4d-4f6fc1d34037
+replayed states include QUEUED, DELIVERED, ACCEPTED, WORKING, RESULT_CAPTURED, COMPLETED
+RESULT_CAPTURED bodyAvailable=false
+COMPLETED bodyAvailable=true
+probe resultSha256=ce9414dd04fe18993f14c6ee66a2f61988d11ff236f73aba807c4e6840e636ad
+
+Exact visual capture SHA-256:
+notebook/chat=4dd301f1c186e108586c075313920001320cd5eaa89f307d2022881f6526dd9d
+notebook/workspace=70e5759af40442e1371c4a37e8343207871dd6eb2725fffd302727667aed9522
+notebook-team2/chat=0d6772c5a4cc7ea0164276f78803399c7ae5c4c507a4a198788508c99cec834a
+notebook-team2/workspace=c2a448dbb048a099d4d95cb2207fee5ac748689ab98c4a8f4698dfab637a2fc9

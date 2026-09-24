@@ -1,0 +1,17 @@
+MCF-LIVE-AGENT-COMMS-001 — Emily R4 final consistency audit
+mission=MCF-LIVE-AGENT-COMMS-001-EMILY-R4-CONSISTENCY
+envelope=4cfbd0ec-220c-44db-b5e6-54e533ce677e
+state=COMPLETED
+result_sha256=c39bff6b6f637d639c4ac62b9c45785aced0928fac831e632fa6d80df1970663
+decision=PASS
+critical=0
+high=0
+medium_blocker=0
+low_blocker=0
+finding_PRF-CLOSEOUT-0.6.0-002=REMOVED
+release_code_sha=c11e3984fc76a19780593d35eaabc7f903193322
+audited_closeout_head=356f4cabfcf7e22c65d3a96595b6d84684cc5972
+audited_closeout_checks=Checks_89_SUCCESS
+appimage_sha256=ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951
+merge_release_gate=LIBERADO_TECNICAMENTE
+seal_rule=post-audit commit may only record R4 result, checkpoint MERGE_READY and regenerated manifest; no executable or prior audited evidence changes

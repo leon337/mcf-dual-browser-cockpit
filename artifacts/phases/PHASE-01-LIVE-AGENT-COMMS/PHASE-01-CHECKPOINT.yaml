@@ -1,0 +1,27 @@
+mission_id: MCF-LIVE-AGENT-COMMS-001
+phase_id: PHASE-01-LIVE-AGENT-COMMS
+class: C
+authority: LEANDRO
+orchestrator: MESTRE
+state: MERGE_READY
+version: 0.6.0
+release_code_sha: c11e3984fc76a19780593d35eaabc7f903193322
+appimage_sha256: ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951
+release_ci: Checks_77_SUCCESS
+production: EXACT_ARTIFACT_ACTIVE
+smoke: FOUR_OF_FOUR_COMPLETED
+replay_disconnect_reconnect: PASS_15_EVENTS
+audit_r1: FAIL_DOCUMENTATION_ONLY
+audit_r2: PASS_SUPERSEDED
+audit_r3_5e33: FAIL_DOCUMENTATION_ONLY
+audit_r4:
+  decision: PASS
+  result_sha256: c39bff6b6f637d639c4ac62b9c45785aced0928fac831e632fa6d80df1970663
+  critical: 0
+  high: 0
+  merge_release_gate: LIBERADO_TECNICAMENTE
+next_gate: FINAL_SEAL_CI_THEN_MERGE_PR_8
+authorization: FINALIZE_AND_PRODUCTION_AUTHORIZED_BY_LEANDRO
+prohibitions:
+  - do_not_merge_pr_6_without_separate_leandro_decision
+  - do_not_delete_mcf_agent_lifecycle_002_untracked_evidence

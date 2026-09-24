@@ -1,0 +1,20 @@
+MCF-LIVE-AGENT-COMMS-001 — Emily final exact-artifact audit R3
+mission=MCF-LIVE-AGENT-COMMS-001-EMILY-FINAL-EXACT-R3
+envelope=4d8ab120-f2cf-4e3d-9ed0-89a61b32ac1e
+state=COMPLETED
+result_sha256=94b73f9af663672aab5afbbd20f910a3c46290968d2eb6c3eadad05e01ca7ea0
+decision=PASS
+critical=0
+high=0
+medium_blocker=0
+low_blocker=0
+release_code_sha=c11e3984fc76a19780593d35eaabc7f903193322
+audited_closeout_head=4d51a1768ce226f5d91c30e0e660d4b941252d5b
+audited_closeout_checks=Checks_81_SUCCESS
+appimage_sha256=ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951
+release_status=QUALIFIED
+closeout_status=CONSISTENT
+residual_technical_or_evidence_requirements=NONE
+
+status=SUPERSEDED_BY_5E33_EXACT_CLOSEOUT_AUDIT
+note=PASS remains lineage only; not the final gate.

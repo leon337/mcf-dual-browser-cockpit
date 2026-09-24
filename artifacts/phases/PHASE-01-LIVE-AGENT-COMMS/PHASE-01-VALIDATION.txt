@@ -1,0 +1,19 @@
+MCF-LIVE-AGENT-COMMS-001 — validation after R3 documentation finding
+
+release_code_sha=c11e3984fc76a19780593d35eaabc7f903193322
+version=0.6.0
+appimage_sha256=ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951
+release_ci=Checks_77_SUCCESS
+npm_check=PASS
+npm_test=55/55_PASS
+git_diff_check=PASS
+exact_four_agent_smoke=PASS
+exact_reconnect_replay=PASS_replayCount_15
+production_two_instances=PASS
+
+audit_r1=FAIL_DOCUMENTATION_ONLY
+audit_r2=PASS_SUPERSEDED
+audit_r3_4d51=PASS_SUPERSEDED
+audit_r3_5e33=FAIL_DOCUMENTATION_ONLY_PRF-CLOSEOUT-0.6.0-002
+functional_release_status=PASS
+current_gate=R4_SHORT_CONSISTENCY_AUDIT_REQUIRED

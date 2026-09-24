@@ -12,9 +12,12 @@ test('profiles reject traversal and isolate atomic state', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-test-'));
   try {
     const a = instanceConfig(['--instance=notebook'], dir);
-    const b = instanceConfig(['--instance=monitor'], dir);
+    const b = instanceConfig(['--instance=monitor', '--agent-profile=debug-engineering'], dir);
     assert.notEqual(a.userData, b.userData);
+    assert.equal(a.agentProfile, 'audit-architecture');
+    assert.equal(b.agentProfile, 'debug-engineering');
     assert.throws(() => instanceConfig(['--instance=../escape'], dir));
+    assert.throws(() => instanceConfig(['--instance=x', '--agent-profile=../escape'], dir));
     for (const c of [a,b]) atomicJson(path.join(c.userData, 'state.json'), { id: c.id });
     assert.equal(JSON.parse(readFileSync(path.join(a.userData, 'state.json'))).id, 'notebook');
     assert.equal(statSync(path.join(a.userData, 'state.json')).mode & 0o777, 0o600);
@@ -69,4 +72,577 @@ test('HTTP bridge security and concurrency', async t => {
   assert.equal(page.nodes[0].text, '');
   assert.ok(!JSON.stringify(page).includes('DO_NOT_LEAK'));
   const oldToken = bridge.token; await bridge.stop(); await bridge.start(0); assert.notEqual(oldToken, bridge.token);
+});
+
+
+test('message API targets chat and workspace without system input and broadcasts concurrently', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-message-'));
+  let entrants = 0;
+  const inserted = { chat: [], workspace: [] };
+  const scripts = { chat: [], workspace: [] };
+
+  function fakeWebContents(pane) {
+    return {
+      isDestroyed: () => false,
+      getURL: () => 'https://chatgpt.com/c/test-' + pane,
+      getTitle: () => pane,
+      isLoading: () => false,
+      navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+      executeJavaScript: async script => {
+        scripts[pane].push(script);
+        if (script.includes('const enforceChatMode')) {
+          return {
+            ok: true,
+            baseline: {
+              url: 'https://chatgpt.com/c/test-' + pane,
+              userMessageCount: 1,
+              lastUserMessageId: 'user-old-' + pane,
+              lastAssistantMessageId: 'assistant-old-' + pane,
+            },
+          };
+        }
+        if (script.includes('chat_send_control_not_found')) {
+          return { ok: true, method: 'button' };
+        }
+        if (script.includes('conversationAdvanced')) {
+          return {
+            ok: true,
+            composerCleared: true,
+            conversationAdvanced: true,
+            sent: true,
+            url: 'https://chatgpt.com/c/test-' + pane,
+            userMessageCount: 2,
+            lastUserMessageId: 'user-new-' + pane,
+            lastAssistantMessageId: 'assistant-old-' + pane,
+            baselineLastAssistantMessageId: 'assistant-old-' + pane,
+          };
+        }
+        if (script.includes('const expected =')) {
+          return {
+            ok: true,
+            composerEmpty: true,
+            composerTextLength: 0,
+            automationResidual: false,
+          };
+        }
+        return { ok: true };
+      },
+      insertText: async value => {
+        inserted[pane].push(value);
+      },
+    };
+  }
+
+  const panes = {
+    chat: fakeWebContents('chat'),
+    workspace: fakeWebContents('workspace'),
+  };
+
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => panes.workspace,
+    getPaneWebContents: pane => panes[pane] ?? null,
+    captureDir: dir,
+    instanceId: 'test',
+  });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive: true }); });
+
+  const url = 'http://127.0.0.1:' + bridge.port;
+  const request = (route, body) => fetch(url + route, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + bridge.token,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const single = await request('/v1/message', { pane: 'chat', message: 'olá emilly' });
+  assert.equal(single.status, 200);
+  assert.deepEqual(inserted.chat, ['olá emilly']);
+  assert.ok(scripts.chat[0].includes('const enforceChatMode = true'));
+
+  entrants = 0;
+  let releaseBroadcast;
+  const broadcastGate = new Promise(resolve => { releaseBroadcast = resolve; });
+  for (const pane of Object.values(panes)) {
+    pane.insertText = async value => {
+      entrants += 1;
+      if (entrants === 2) releaseBroadcast();
+      await Promise.race([
+        broadcastGate,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('broadcast_not_parallel')), 250)),
+      ]);
+      inserted[pane.getTitle()].push(value);
+    };
+  }
+
+  const broadcast = await request('/v1/messages/broadcast', {
+    targets: ['chat', 'workspace'],
+    message: 'teste simultâneo',
+  });
+  assert.equal(broadcast.status, 200);
+  const payload = await broadcast.json();
+  assert.equal(payload.ok, true);
+  assert.deepEqual(payload.targets.sort(), ['chat', 'workspace']);
+  assert.deepEqual(inserted.chat, ['olá emilly', 'teste simultâneo']);
+  assert.deepEqual(inserted.workspace, ['teste simultâneo']);
+  assert.ok(scripts.workspace.some(script => script.includes('const enforceChatMode = false')));
+
+  assert.equal((await request('/v1/message', { pane: 'other', message: 'x' })).status, 400);
+  assert.equal((await request('/v1/message', { pane: 'chat', message: '' })).status, 400);
+
+  const beforeBlocked = inserted.chat.length;
+  panes.chat.executeJavaScript = async () => ({ ok: false, error: 'rate_limit_hard_block' });
+  const blocked = await request('/v1/message', { pane: 'chat', message: 'não deve inserir' });
+  assert.equal(blocked.status, 429);
+  assert.equal(inserted.chat.length, beforeBlocked);
+});
+
+
+test('browser automation routes target chat or workspace explicitly', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-pane-routes-'));
+  const calls = { chat: [], workspace: [] };
+
+  function fakeWebContents(pane) {
+    let currentUrl = 'https://' + pane + '.test/';
+    return {
+      isDestroyed: () => false,
+      getURL: () => currentUrl,
+      getTitle: () => pane.toUpperCase(),
+      isLoading: () => false,
+      navigationHistory: {
+        canGoBack: () => true,
+        canGoForward: () => true,
+        goBack: () => calls[pane].push(['back']),
+        goForward: () => calls[pane].push(['forward']),
+      },
+      loadURL: async url => { currentUrl = url; calls[pane].push(['navigate', url]); },
+      reload: () => calls[pane].push(['reload']),
+      stop: () => calls[pane].push(['stop']),
+      sendInputEvent: event => calls[pane].push(['input', event.type]),
+      executeJavaScript: async script => {
+        calls[pane].push(['script', script]);
+        if (script.includes('document.body?.innerText')) {
+          return { url: currentUrl, title: pane.toUpperCase(), text: 'TEXT-' + pane };
+        }
+        if (script.includes('const nodes =')) {
+          return { url: currentUrl, title: pane.toUpperCase(), nodes: [{ text: pane }] };
+        }
+        return { ok: true };
+      },
+      mainFrame: {
+        framesInSubtree: [{
+          executeJavaScript: async () => {
+            calls[pane].push(['frame-click']);
+            return { ok: true };
+          },
+        }],
+      },
+      capturePage: async () => ({ toPNG: () => Buffer.from(pane) }),
+    };
+  }
+
+  const panes = {
+    chat: fakeWebContents('chat'),
+    workspace: fakeWebContents('workspace'),
+  };
+
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => panes.workspace,
+    getPaneWebContents: pane => panes[pane] ?? null,
+    captureDir: dir,
+    instanceId: 'test',
+  });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive: true }); });
+
+  const base = 'http://127.0.0.1:' + bridge.port;
+  const auth = { Authorization: 'Bearer ' + bridge.token };
+  const get = route => fetch(base + route, { headers: auth });
+  const post = (route, body) => fetch(base + route, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const chatState = await (await get('/v1/state?pane=chat')).json();
+  assert.equal(chatState.state.pane, 'chat');
+  assert.equal(chatState.state.title, 'CHAT');
+
+  const defaultState = await (await get('/v1/state')).json();
+  assert.equal(defaultState.state.pane, 'workspace');
+  assert.equal(defaultState.state.title, 'WORKSPACE');
+
+  const chatText = await (await get('/v1/text?pane=chat')).json();
+  assert.equal(chatText.pane, 'chat');
+  assert.equal(chatText.page.text, 'TEXT-chat');
+
+  const chatInteractive = await (await get('/v1/interactive?pane=chat')).json();
+  assert.equal(chatInteractive.pane, 'chat');
+  assert.equal(chatInteractive.page.title, 'CHAT');
+
+  assert.equal((await post('/v1/navigate', { pane: 'chat', url: 'https://example.com/chat' })).status, 200);
+  assert.ok(calls.chat.some(call => call[0] === 'navigate'));
+  assert.ok(!calls.workspace.some(call => call[0] === 'navigate'));
+
+  assert.equal((await post('/v1/action', { pane: 'chat', action: 'reload' })).status, 200);
+  assert.ok(calls.chat.some(call => call[0] === 'reload'));
+
+  assert.equal((await post('/v1/find-click', { pane: 'chat', text: 'continue' })).status, 200);
+  assert.ok(calls.chat.some(call => call[0] === 'frame-click'));
+
+  assert.equal((await post('/v1/click', { pane: 'chat', selector: '#go' })).status, 200);
+  assert.equal((await post('/v1/type', { pane: 'chat', selector: '#field', text: 'abc' })).status, 200);
+  assert.equal((await post('/v1/pointer', { pane: 'chat', x: 10, y: 20 })).status, 200);
+  assert.ok(calls.chat.some(call => call[0] === 'input'));
+
+  assert.equal((await get('/v1/state?pane=other')).status, 400);
+  assert.equal((await post('/v1/navigate', { pane: 'other', url: 'https://example.com/' })).status, 400);
+});
+
+
+test('identity runtime endpoints expose agents, bootstrap, missions and receipts', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-identity-api-'));
+  const calls = [];
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => ({
+      isDestroyed: () => false,
+      getURL: () => 'https://workspace.test/',
+      getTitle: () => 'workspace',
+      isLoading: () => false,
+      navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    }),
+    captureDir: dir,
+    instanceId: 'test',
+    getAgentIdentities: async () => ([
+      { pane: 'chat', agentId: 'Emily', state: 'READY' },
+      { pane: 'workspace', agentId: 'Sofia', state: 'READY' },
+    ]),
+    bootstrapAgentIdentities: async input => {
+      calls.push(['bootstrap', input]);
+      return { ok: true, agents: ['Emily', 'Sofia'] };
+    },
+    dispatchAgentMission: async input => {
+      calls.push(['mission', input]);
+      return {
+        ok: true,
+        envelope: { envelopeId: 'env-1', agent: { agentId: input.agentId } },
+        receipt: { receiptId: 'receipt-1', status: 'DELIVERED' },
+      };
+    },
+    listAgentReceipts: async () => ([{ receiptId: 'receipt-1', status: 'DELIVERED' }]),
+    listAgentMissions: async () => ([
+      { envelopeId: 'env-1', missionId: 'MISSION-1', parentMissionId: 'PARENT-1', state: 'COMPLETED', result: { resultSha256: 'a'.repeat(64) } },
+    ]),
+    getAgentMission: async envelopeId => envelopeId === 'env-1'
+      ? { envelopeId: 'env-1', missionId: 'MISSION-1', parentMissionId: 'PARENT-1', state: 'COMPLETED', result: { resultSha256: 'a'.repeat(64) } }
+      : null,
+    getParentAgentMissionStatus: async missionId => ({
+      parentMissionId: missionId,
+      required: 1,
+      completed: 1,
+      active: 0,
+      closable: true,
+      blockers: [],
+    }),
+  });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive: true }); });
+
+  const base = 'http://127.0.0.1:' + bridge.port;
+  const auth = { Authorization: 'Bearer ' + bridge.token };
+  const get = route => fetch(base + route, { headers: auth });
+  const post = (route, body) => fetch(base + route, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const agents = await (await get('/v1/agents')).json();
+  assert.equal(agents.ok, true);
+  assert.equal(agents.agents.length, 2);
+  assert.equal(agents.agents[0].agentId, 'Emily');
+
+  const boot = await (await post('/v1/agents/bootstrap', { agentId: 'Emily' })).json();
+  assert.equal(boot.ok, true);
+  assert.deepEqual(calls[0], ['bootstrap', { agentId: 'Emily' }]);
+
+  const mission = await (await post('/v1/mission-envelope', {
+    agentId: 'Sofia',
+    missionId: 'MISSION-1',
+    objective: 'Definir uma fronteira.',
+  })).json();
+  assert.equal(mission.ok, true);
+  assert.equal(mission.envelope.agent.agentId, 'Sofia');
+
+  const receipts = await (await get('/v1/agent-receipts')).json();
+  assert.equal(receipts.ok, true);
+  assert.equal(receipts.receipts[0].receiptId, 'receipt-1');
+
+  const missions = await (await get('/v1/missions')).json();
+  assert.equal(missions.ok, true);
+  assert.equal(missions.missions[0].state, 'COMPLETED');
+
+  const missionStatus = await (await get('/v1/mission-status?envelopeId=env-1')).json();
+  assert.equal(missionStatus.ok, true);
+  assert.equal(missionStatus.mission.envelopeId, 'env-1');
+
+  const result = await (await get('/v1/mission-result?envelopeId=env-1')).json();
+  assert.equal(result.ok, true);
+  assert.equal(result.result.resultSha256, 'a'.repeat(64));
+
+  const parent = await (await get('/v1/parent-mission-status?missionId=PARENT-1')).json();
+  assert.equal(parent.ok, true);
+  assert.equal(parent.status.closable, true);
+
+  assert.equal((await get('/v1/mission-status?envelopeId=missing')).status, 404);
+});
+
+
+test('message delivery requires conversation advancement and cleans residual draft on failure', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-message-confirm-'));
+  const scripts = [];
+  let composerText = '';
+  let userMessageCount = 4;
+  const url = 'https://chatgpt.com/g/project/c/conversation-1';
+
+  const wc = {
+    isDestroyed: () => false,
+    getURL: () => url,
+    getTitle: () => 'chat',
+    isLoading: () => false,
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    insertText: async value => { composerText = value; },
+    executeJavaScript: async script => {
+      scripts.push(script);
+      if (script.includes('const enforceChatMode')) {
+        composerText = '';
+        return {
+          ok: true,
+          baseline: { url, userMessageCount, lastUserMessageId: 'user-old', lastAssistantMessageId: 'assistant-old' },
+        };
+      }
+      if (script.includes('chat_send_control_not_found')) {
+        return { ok: true, method: 'button' };
+      }
+      if (script.includes('conversationAdvanced')) {
+        return {
+          ok: true,
+          composerCleared: false,
+          conversationAdvanced: false,
+          sent: false,
+          url,
+          userMessageCount,
+        };
+      }
+      if (script.includes('MCF_DRAFT_CLEANUP')) {
+        composerText = '';
+        return { ok: true, cleaned: true, remainingLength: 0 };
+      }
+      return { ok: true };
+    },
+  };
+
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    getPaneWebContents: pane => pane === 'chat' ? wc : null,
+    captureDir: dir,
+    instanceId: 'test',
+  });
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive: true }); });
+
+  const failed = await bridge.sendMessage('chat', 'mensagem residual');
+  assert.equal(failed.ok, false);
+  assert.equal(failed.error, 'message_send_unconfirmed');
+  assert.equal(failed.cleanup?.cleaned, true);
+  assert.equal(composerText, '');
+  assert.ok(scripts.some(script => script.includes('MCF_DRAFT_CLEANUP')));
+
+  // Now prove that an empty composer alone is not enough: conversation must advance.
+  let verificationCalls = 0;
+  wc.executeJavaScript = async script => {
+    scripts.push(script);
+    if (script.includes('const enforceChatMode')) {
+      composerText = '';
+      return { ok: true, baseline: { url, userMessageCount, lastUserMessageId: 'user-old', lastAssistantMessageId: 'assistant-old' } };
+    }
+    if (script.includes('chat_send_control_not_found')) {
+      return { ok: true, method: 'button' };
+    }
+    if (script.includes('conversationAdvanced')) {
+      verificationCalls += 1;
+      composerText = '';
+      if (verificationCalls < 2) {
+        return {
+          ok: true,
+          composerCleared: true,
+          conversationAdvanced: false,
+          sent: false,
+          url,
+          userMessageCount,
+        };
+      }
+      userMessageCount += 1;
+      return {
+        ok: true,
+        composerCleared: true,
+        conversationAdvanced: true,
+        sent: true,
+        url,
+        userMessageCount,
+        lastUserMessageId: 'user-new',
+        lastAssistantMessageId: 'assistant-old',
+        baselineLastAssistantMessageId: 'assistant-old',
+      };
+    }
+    if (script.includes('MCF_DRAFT_CLEANUP')) {
+      composerText = '';
+      return { ok: true, cleaned: true, remainingLength: 0 };
+    }
+    if (script.includes('const expected =')) {
+      return {
+        ok: true,
+        composerEmpty: true,
+        composerTextLength: 0,
+        automationResidual: false,
+      };
+    }
+    return { ok: true };
+  };
+
+  const delivered = await bridge.sendMessage('chat', 'mensagem confirmada');
+  assert.equal(delivered.ok, true);
+  assert.equal(delivered.deliveryConfirmed, true);
+  assert.ok(verificationCalls >= 2);
+});
+
+
+test('post-send stabilization cleans only automation residuals and preserves unknown drafts', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-postsend-'));
+  let mode = 'automation';
+  let cleanupCalls = 0;
+  const url = 'https://chatgpt.com/g/project/c/conversation-2';
+
+  const wc = {
+    isDestroyed: () => false,
+    getURL: () => url,
+    getTitle: () => 'chat',
+    isLoading: () => false,
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    insertText: async () => {},
+    executeJavaScript: async script => {
+      if (script.includes('const enforceChatMode')) {
+        return {
+          ok: true,
+          baseline: {
+            url,
+            userMessageCount: 2,
+            lastUserMessageId: 'user-old',
+            lastAssistantMessageId: 'assistant-old',
+          },
+        };
+      }
+      if (script.includes('chat_send_control_not_found')) {
+        return { ok: true, method: 'button' };
+      }
+      if (script.includes('conversationAdvanced')) {
+        return {
+          ok: true,
+          composerCleared: true,
+          conversationAdvanced: true,
+          sent: true,
+          url,
+          userMessageCount: 2,
+          lastUserMessageId: 'user-new',
+          lastAssistantMessageId: 'assistant-old',
+          baselineLastAssistantMessageId: 'assistant-old',
+        };
+      }
+      if (script.includes('const expected =')) {
+        return mode === 'automation'
+          ? {
+              ok: true,
+              composerEmpty: false,
+              composerTextLength: 200,
+              automationResidual: true,
+            }
+          : {
+              ok: true,
+              composerEmpty: false,
+              composerTextLength: 22,
+              automationResidual: false,
+            };
+      }
+      if (script.includes('MCF_DRAFT_CLEANUP')) {
+        cleanupCalls += 1;
+        return { ok: true, cleaned: true, remainingLength: 0 };
+      }
+      return { ok: true };
+    },
+  };
+
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    getPaneWebContents: pane => pane === 'chat' ? wc : null,
+    captureDir: dir,
+    instanceId: 'test',
+  });
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive: true }); });
+
+  const cleaned = await bridge.sendMessage(
+    'chat',
+    '[MCF MISSION ENVELOPE]\nparentMissionId: PARENT-1',
+  );
+  assert.equal(cleaned.ok, true);
+  assert.equal(cleaned.deliveryConfirmed, true);
+  assert.equal(cleaned.postSendStable, true);
+  assert.equal(cleaned.postSendCleanup?.cleaned, true);
+  assert.equal(cleanupCalls, 1);
+
+  mode = 'human';
+  const preserved = await bridge.sendMessage('chat', 'mensagem normal');
+  assert.equal(preserved.ok, false);
+  assert.equal(preserved.error, 'message_postsend_draft_present');
+  assert.equal(preserved.cleanup?.preserved, true);
+  assert.equal(preserved.cleanup?.reason, 'unrecognized_draft_preserved');
+  assert.equal(cleanupCalls, 1);
+});
+
+test('mission endpoint returns 503 while agent runtime startup recovery is incomplete', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-runtime-startup-gate-'));
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => ({
+      isDestroyed: () => false,
+      getURL: () => 'https://workspace.test/',
+      getTitle: () => 'workspace',
+      isLoading: () => false,
+      navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    }),
+    captureDir: dir,
+    instanceId: 'test',
+    dispatchAgentMission: async () => ({
+      ok: false,
+      error: 'agent_runtime_initializing',
+    }),
+  });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive: true }); });
+
+  const response = await fetch('http://127.0.0.1:' + bridge.port + '/v1/mission-envelope', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + bridge.token,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      agentId: 'Sofia',
+      missionId: 'MISSION-STARTUP-GATE-HTTP',
+      objective: 'Aguardar startup.',
+    }),
+  });
+  assert.equal(response.status, 503);
+  const body = await response.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.error, 'agent_runtime_initializing');
 });
