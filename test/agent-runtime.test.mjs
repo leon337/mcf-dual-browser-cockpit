@@ -826,6 +826,7 @@ test('conversation change during result observation fails closed and releases th
   };
   const surface = {
     getUrl: pane => 'https://chatgpt.test/' + pane + '/c/conv-other',
+    inspectMissionExecution: async () => ({ ok: true, verified: true, activeExecution: false, generationActive: false, userAnchorFound: true, lateResultObserved: false }),
     freshConversation: async () => {},
     sendMessage: async pane => ({
       ok: true, pane, method: 'button', deliveryConfirmed: true,
@@ -891,7 +892,7 @@ test('conversation change during result observation fails closed and releases th
   assert.equal(blocked.error, 'pane_recovery_required');
   assert.equal(blocked.envelopeId, first.envelope.envelopeId);
 
-  const reconciled = runtime.reconcileMission({
+  const reconciled = await runtime.reconcileMission({
     envelopeId: first.envelope.envelopeId,
     outcome: 'no_active_execution_confirmed',
     authority: 'LEANDRO',
@@ -2058,6 +2059,7 @@ test('runtime blocks retry and new same-pane mission while start-timeout reconci
   };
   const surface = {
     getUrl: pane => 'https://chatgpt.test/' + pane + '/c/reconcile-retry',
+    inspectMissionExecution: async () => ({ ok: true, verified: true, activeExecution: false, generationActive: false, userAnchorFound: true, lateResultObserved: false }),
     freshConversation: async () => {},
     waitForAssistantMarker: async () => true,
     sendMessage: async pane => {
@@ -2164,7 +2166,7 @@ test('runtime blocks retry and new same-pane mission while start-timeout reconci
   assert.equal(blockedNewMission.error, 'pane_recovery_required');
   assert.equal(missionSendCalls, 1);
 
-  const reconciled = runtime.reconcileMission({
+  const reconciled = await runtime.reconcileMission({
     envelopeId: first.envelope.envelopeId,
     outcome: 'no_active_execution_confirmed',
     authority: 'LEANDRO',
@@ -2272,6 +2274,7 @@ test('explicit cancellation is a request until no-effect reconciliation confirms
   const waitForStart = new Promise(resolve => { releaseStart = resolve; });
   const surface = {
     getUrl: pane => 'https://chatgpt.test/' + pane + '/c/cancel-explicit',
+    inspectMissionExecution: async () => ({ ok: true, verified: true, activeExecution: false, generationActive: false, userAnchorFound: true, lateResultObserved: false }),
     freshConversation: async () => {},
     waitForAssistantMarker: async () => true,
     sendMessage: async pane => ({
@@ -2336,7 +2339,7 @@ test('explicit cancellation is a request until no-effect reconciliation confirms
   assert.equal(interrupted.reconciliationRequired, true);
   assert.equal(runtime.getRecoveryCheckpoint({ pane: 'workspace' }).mutationAllowed, false);
 
-  const reconciled = runtime.reconcileMission({
+  const reconciled = await runtime.reconcileMission({
     envelopeId: dispatched.envelope.envelopeId,
     outcome: 'cancelled_no_effect_confirmed',
     authority: 'LEANDRO',
@@ -2353,6 +2356,201 @@ test('explicit cancellation is a request until no-effect reconciliation confirms
   assert.ok(kinds.includes('MISSION_CANCEL_SIGNAL_SENT'));
   assert.ok(kinds.includes('MISSION_CANCELLED_BY_AUTHORITY'));
 });
+
+
+test('cancelling a QUEUED mission defers the Stop signal until its own delivery is identified', async () => {
+  let state = null;
+  let releaseDelivery;
+  let signalDeliveryStarted;
+  const deliveryStarted = new Promise(resolve => { signalDeliveryStarted = resolve; });
+  const deliveryGate = new Promise(resolve => { releaseDelivery = resolve; });
+  let cancelCalls = 0;
+
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/queued-cancel',
+    freshConversation: async () => {},
+    waitForAssistantMarker: async () => true,
+    sendMessage: async (pane, message) => {
+      if (!String(message || '').includes('[MCF MISSION ENVELOPE]')) {
+        return {
+          ok: true,
+          pane,
+          url: 'https://chatgpt.test/' + pane + '/c/identity-bootstrap',
+        };
+      }
+      signalDeliveryStarted();
+      await deliveryGate;
+      return {
+        ok: true,
+        pane,
+        deliveryConfirmed: true,
+        composerCleared: true,
+        conversationAdvanced: true,
+        userMessageId: 'user-queued-cancel',
+        baselineAssistantMessageId: 'assistant-before-queued-cancel',
+        url: 'https://chatgpt.test/' + pane + '/c/queued-cancel',
+      };
+    },
+    cancelAssistantGeneration: async (_pane, input) => {
+      cancelCalls += 1;
+      assert.equal(input.expectedConversationUrl, 'https://chatgpt.test/workspace/c/queued-cancel');
+      return {
+        ok: true,
+        requested: true,
+        generationInactiveObserved: true,
+        reconciliationRequired: true,
+      };
+    },
+    waitForAssistantStart: async () => ({
+      ok: false,
+      accepted: false,
+      interrupted: true,
+      error: 'assistant_interrupted',
+      terminalSignal: 'assistant_interrupted',
+      linkedUserMessageId: 'user-queued-cancel',
+    }),
+  };
+
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+  });
+  await runtime.bootstrap();
+
+  const dispatched = await runtime.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'MISSION-QUEUED-CANCEL-1',
+    parentMissionId: 'PARENT-QUEUED-CANCEL-1',
+    objective: 'Não parar outra execução enquanto o próprio delivery ainda é desconhecido.',
+  });
+  await deliveryStarted;
+
+  const requested = await runtime.requestMissionCancellation({
+    envelopeId: dispatched.envelope.envelopeId,
+    authority: 'LEANDRO',
+    reason: 'explicit queued cancellation test',
+  });
+  assert.equal(requested.ok, true);
+  assert.equal(requested.cancellationSignal?.deferred, true);
+  assert.equal(cancelCalls, 0);
+
+  releaseDelivery();
+  await runtime.waitForPendingMissions();
+
+  assert.equal(cancelCalls, 1);
+  const mission = runtime.getMission(dispatched.envelope.envelopeId);
+  assert.equal(mission.state, 'INTERRUPTED');
+  assert.equal(mission.cancellationRequested, true);
+  assert.equal(mission.cancellationSignal?.requested, true);
+  const kinds = runtime.listReceipts()
+    .filter(r => r.envelope?.envelopeId === dispatched.envelope.envelopeId)
+    .map(r => r.kind);
+  assert.ok(kinds.includes('MISSION_CANCEL_SIGNAL_DEFERRED'));
+  assert.ok(kinds.includes('MISSION_CANCEL_SIGNAL_SENT'));
+});
+
+
+test('historical cancellation request on a COMPLETED mission does not permanently block its pane', async () => {
+  let state = null;
+  let seq = 0;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/completed-cancel-history',
+    freshConversation: async () => {},
+    waitForAssistantMarker: async () => true,
+    sendMessage: async pane => {
+      seq += 1;
+      return {
+        ok: true,
+        pane,
+        deliveryConfirmed: true,
+        composerCleared: true,
+        conversationAdvanced: true,
+        userMessageId: 'user-completed-' + seq,
+        baselineAssistantMessageId: 'assistant-before-completed-' + seq,
+        url: 'https://chatgpt.test/' + pane + '/c/completed-cancel-history',
+      };
+    },
+    waitForAssistantStart: async () => ({
+      ok: true,
+      accepted: true,
+      assistantMessageId: 'assistant-completed-' + seq,
+      linkedUserMessageId: 'user-completed-' + seq,
+      markerObserved: false,
+      generationActive: false,
+    }),
+    waitForAssistantResult: async () => ({
+      ok: true,
+      generationFinished: true,
+      generationActive: false,
+      terminalSignal: 'ui_generation_inactive_with_final_actions',
+      finalActionsObserved: true,
+      stableForMs: 1500,
+      assistantMessageId: 'assistant-completed-' + seq,
+      linkedUserMessageId: 'user-completed-' + seq,
+      conversationId: 'completed-cancel-history',
+      text: 'Resultado terminal ' + seq,
+    }),
+  };
+
+  const runtime1 = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+  });
+  await runtime1.bootstrap();
+  const first = await runtime1.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'MISSION-COMPLETED-CANCEL-HISTORY-1',
+    parentMissionId: 'PARENT-COMPLETED-CANCEL-HISTORY',
+    objective: 'Gerar um terminal válido.',
+  });
+  await runtime1.waitForPendingMissions();
+  assert.equal(runtime1.getMission(first.envelope.envelopeId).state, 'COMPLETED');
+
+  state.missions[first.envelope.envelopeId].cancellationRequested = true;
+  state.missions[first.envelope.envelopeId].cancellationOutcome = 'too_late_result_completed';
+  state.missions[first.envelope.envelopeId].reconciliationRequired = false;
+
+  const runtime2 = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker,
+    surface,
+    loadState: () => structuredClone(state),
+    saveState: next => { state = structuredClone(next); },
+  });
+
+  const second = await runtime2.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'MISSION-AFTER-COMPLETED-CANCEL-HISTORY',
+    parentMissionId: 'PARENT-COMPLETED-CANCEL-HISTORY',
+    objective: 'Provar que o pane não fica bloqueado por flag histórica.',
+  });
+  assert.equal(second.ok, true);
+  assert.equal(second.queued, true);
+  await runtime2.waitForPendingMissions();
+  assert.equal(runtime2.getMission(second.envelope.envelopeId).state, 'COMPLETED');
+});
+
 
 test('runtime bootstraps Patrícia and Rafael with profile-specific immutable pane bindings', async () => {
   const sent = [];
@@ -2479,6 +2677,7 @@ test('runtime fails closed on lost conversation anchor and releases same-pane qu
   };
   const surface = {
     getUrl: pane => 'https://chatgpt.test/' + pane + '/c/conv-live',
+    inspectMissionExecution: async () => ({ ok: true, verified: true, activeExecution: false, generationActive: false, userAnchorFound: true, lateResultObserved: false }),
     freshConversation: async () => {},
     sendMessage: async pane => ({
       ok: true,
@@ -2551,7 +2750,7 @@ test('runtime fails closed on lost conversation anchor and releases same-pane qu
   assert.equal(firstAfterLoss.reconciliationRequired, true);
   assert.equal(runtime.getRecoveryCheckpoint({ pane: 'chat' }).mutationAllowed, false);
 
-  const reconciled = runtime.reconcileMission({
+  const reconciled = await runtime.reconcileMission({
     envelopeId: first.envelope.envelopeId,
     outcome: 'no_active_execution_confirmed',
     authority: 'LEANDRO',

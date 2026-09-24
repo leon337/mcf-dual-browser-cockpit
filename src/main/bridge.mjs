@@ -954,6 +954,29 @@ export class LocalAgentBridge {
       }
       const { pane, wc } = target;
 
+      const recoveryGuardedPaneMutationRoutes = new Set([
+        '/v1/navigate',
+        '/v1/action',
+        '/v1/find-click',
+        '/v1/click',
+        '/v1/type',
+        '/v1/pointer',
+        '/v1/upload-file',
+      ]);
+      if (req.method === 'POST'
+          && recoveryGuardedPaneMutationRoutes.has(requestUrl.pathname)
+          && typeof this.getAgentRecoveryCheckpoint === 'function') {
+        const checkpoint = await this.getAgentRecoveryCheckpoint({ pane });
+        if (checkpoint?.recoveryRequired || checkpoint?.mutationAllowed === false) {
+          return json(res, 409, {
+            ok: false,
+            error: 'recovery_required',
+            pane,
+            checkpoint,
+          });
+        }
+      }
+
       if (req.method === 'GET' && requestUrl.pathname === '/v1/state') {
         return json(res, 200, {
           ok: true,

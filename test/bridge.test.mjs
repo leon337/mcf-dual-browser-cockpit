@@ -719,6 +719,27 @@ test('recovery checkpoint gates messages and exposes reconcile/cancel lifecycle 
   assert.equal(blockedBroadcast.status, 409);
   assert.equal((await blockedBroadcast.json()).error, 'recovery_required');
 
+  const guardedMutations = [
+    ['/v1/navigate', { pane: 'chat', url: 'https://example.test/recovery-blocked' }],
+    ['/v1/action', { pane: 'chat', action: 'reload' }],
+    ['/v1/find-click', { pane: 'chat', text: 'qualquer botão' }],
+    ['/v1/click', { pane: 'chat', selector: '#prompt-textarea' }],
+    ['/v1/type', { pane: 'chat', selector: '#prompt-textarea', text: 'não deve escrever' }],
+    ['/v1/pointer', { pane: 'chat', x: 10, y: 10 }],
+    ['/v1/upload-file', { pane: 'chat', file: '/tmp/nao-deve-ser-lido' }],
+  ];
+  for (const [route, payload] of guardedMutations) {
+    const response = await fetch(base + route, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    });
+    assert.equal(response.status, 409, route);
+    const body = await response.json();
+    assert.equal(body.error, 'recovery_required', route);
+    assert.equal(body.pane, 'chat', route);
+  }
+
   const reconciled = await fetch(base + '/v1/mission-reconcile', {
     method: 'POST',
     headers,
