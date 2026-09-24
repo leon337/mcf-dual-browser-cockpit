@@ -1436,3 +1436,128 @@ test('runtime recovery fails closed immediately when an interrupted mission has 
     && r.evidence?.error === 'recovery_delivery_anchor_missing'
   ));
 });
+
+
+test('runtime explicitly retries a failed logical mission without breaking idempotency', async () => {
+  let state = null;
+  let missionSends = 0;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/retry',
+    freshConversation: async () => {},
+    sendMessage: async (pane, message) => {
+      if (!String(message).includes('[MCF MISSION ENVELOPE]')) {
+        return {
+          ok: true,
+          pane,
+          method: 'button',
+          deliveryConfirmed: true,
+          composerCleared: true,
+          conversationAdvanced: true,
+          userMessageId: 'bootstrap-user',
+          baselineAssistantMessageId: 'bootstrap-assistant',
+          url: 'https://chatgpt.test/' + pane + '/c/retry',
+        };
+      }
+
+      missionSends += 1;
+      if (missionSends === 1) {
+        return {
+          ok: false,
+          pane,
+          error: 'message_send_unconfirmed',
+          cleanup: { ok: true, cleaned: true, remainingLength: 0 },
+          verification: {
+            ok: true,
+            composerCleared: false,
+            conversationAdvanced: false,
+            sent: false,
+          },
+        };
+      }
+
+      return {
+        ok: true,
+        pane,
+        method: 'button',
+        deliveryConfirmed: true,
+        composerCleared: true,
+        conversationAdvanced: true,
+        userMessageId: 'user-retry-success',
+        baselineAssistantMessageId: 'assistant-before-retry',
+        url: 'https://chatgpt.test/' + pane + '/c/retry',
+      };
+    },
+    waitForAssistantMarker: async () => true,
+    waitForAssistantResult: async (_pane, { marker }) => ({
+      ok: true,
+      generationFinished: true,
+      generationActive: false,
+      terminalSignal: 'transport_end_event',
+      assistantMessageId: 'assistant-retry-final',
+      conversationId: 'retry',
+      url: 'https://chatgpt.test/workspace/c/retry',
+      text: marker + '\nRetry concluído.',
+    }),
+  };
+
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-AGENT-LIFECYCLE-002',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+  });
+  await runtime.bootstrap();
+
+  const input = {
+    agentId: 'Sofia',
+    missionId: 'MISSION-RETRY-FAILED-1',
+    parentMissionId: 'PARENT-RETRY-FAILED-1',
+    objective: 'Validar retry explícito.',
+  };
+
+  const first = await runtime.dispatchMission(input);
+  await runtime.waitForPendingMissions();
+  assert.equal(runtime.getMission(first.envelope.envelopeId).state, 'FAILED');
+  assert.equal(missionSends, 1);
+
+  const dedupe = await runtime.dispatchMission(input);
+  assert.equal(dedupe.ok, true);
+  assert.equal(dedupe.deduplicated, true);
+  assert.equal(dedupe.envelope.envelopeId, first.envelope.envelopeId);
+  assert.equal(missionSends, 1);
+
+  const retry = await runtime.dispatchMission({ ...input, retryFailed: true });
+  assert.equal(retry.ok, true);
+  assert.equal(retry.retried, true);
+  assert.equal(retry.retryOfEnvelopeId, first.envelope.envelopeId);
+  assert.notEqual(retry.envelope.envelopeId, first.envelope.envelopeId);
+
+  await runtime.waitForPendingMissions();
+
+  assert.equal(runtime.getMission(retry.envelope.envelopeId).state, 'COMPLETED');
+  assert.equal(missionSends, 2);
+
+  const attempts = runtime.listMissions().filter(m =>
+    m.agentId === input.agentId
+    && m.missionId === input.missionId
+    && m.parentMissionId === input.parentMissionId
+  );
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[1].retryOfEnvelopeId, first.envelope.envelopeId);
+  assert.equal(attempts[1].attemptNumber, 2);
+
+  const parent = runtime.getParentMissionStatus(input.parentMissionId);
+  assert.equal(parent.required, 1);
+  assert.equal(parent.completed, 1);
+  assert.equal(parent.attempts, 2);
+  assert.equal(parent.active, 0);
+  assert.equal(parent.closable, true);
+});

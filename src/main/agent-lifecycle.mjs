@@ -190,22 +190,71 @@ export function verifyResultCapture(capture) {
 export function parentMissionStatus(parentMissionId, missions) {
   const relevant = (Array.isArray(missions) ? missions : [])
     .filter(item => item?.parentMissionId === parentMissionId && item?.required !== false);
-  const completed = relevant.filter(item => item.state === 'COMPLETED').length;
-  const active = relevant.filter(item => item.state !== 'COMPLETED').length;
+
+  const terminalStates = new Set([
+    'COMPLETED',
+    'FAILED',
+    'UNVERIFIED',
+    'REJECTED',
+    'INTERRUPTED',
+    'CANCELLED_BY_AUTHORITY',
+  ]);
+
+  const groups = new Map();
+  for (const attempt of relevant) {
+    const logicalId = String(attempt?.missionId || attempt?.envelopeId || '');
+    if (!logicalId) continue;
+    const list = groups.get(logicalId) ?? [];
+    list.push(attempt);
+    groups.set(logicalId, list);
+  }
+
+  const logical = [...groups.entries()].map(([missionId, attempts]) => {
+    const completedAttempt = attempts.find(item => item.state === 'COMPLETED') ?? null;
+    const activeAttempts = attempts.filter(item => !terminalStates.has(item.state));
+    return {
+      missionId,
+      attempts,
+      completedAttempt,
+      activeAttempts,
+      completed: Boolean(completedAttempt),
+    };
+  });
+
+  const completed = logical.filter(item => item.completed).length;
+  const activeAttempts = logical.flatMap(item => item.activeAttempts);
+
+  const blockers = [
+    ...activeAttempts.map(item => ({
+      envelopeId: item.envelopeId,
+      missionId: item.missionId,
+      agentId: item.agentId,
+      pane: item.pane,
+      state: item.state,
+    })),
+    ...logical
+      .filter(item => !item.completed && item.activeAttempts.length === 0)
+      .map(item => {
+        const last = item.attempts.at(-1) ?? {};
+        return {
+          envelopeId: last.envelopeId ?? null,
+          missionId: item.missionId,
+          agentId: last.agentId ?? null,
+          pane: last.pane ?? null,
+          state: last.state ?? 'UNRESOLVED',
+        };
+      }),
+  ];
+
   return {
     parentMissionId,
-    required: relevant.length,
+    required: logical.length,
     completed,
-    active,
-    closable: relevant.length > 0 && active === 0,
-    blockers: relevant
-      .filter(item => item.state !== 'COMPLETED')
-      .map(item => ({
-        envelopeId: item.envelopeId,
-        missionId: item.missionId,
-        agentId: item.agentId,
-        pane: item.pane,
-        state: item.state,
-      })),
+    active: activeAttempts.length,
+    attempts: relevant.length,
+    closable: logical.length > 0
+      && completed === logical.length
+      && activeAttempts.length === 0,
+    blockers,
   };
 }

@@ -105,8 +105,8 @@ test('result capture requires positive terminal proof, full assistant message id
 
 test('parent mission remains blocked until every required execution is COMPLETED', () => {
   const missions = [
-    { ...base, envelopeId: 'env-emily', state: 'COMPLETED', required: true },
-    { ...base, envelopeId: 'env-sofia', agentId: 'Sofia', pane: 'workspace', state: 'WORKING', required: true },
+    { ...base, envelopeId: 'env-emily', missionId: 'SUB-EMILY', state: 'COMPLETED', required: true },
+    { ...base, envelopeId: 'env-sofia', missionId: 'SUB-SOFIA', agentId: 'Sofia', pane: 'workspace', state: 'WORKING', required: true },
   ];
 
   const blocked = parentMissionStatus('PARENT-1', missions);
@@ -147,4 +147,44 @@ test('substantive final result may discuss interrupted reasoning without being c
 
   assert.equal(capture.assistantMessageId, 'assistant-final');
   assert.equal(verifyResultCapture(capture), true);
+});
+
+
+test('parent mission groups retry attempts by logical missionId without ignoring active work', () => {
+  const attempts = [
+    { ...base, envelopeId: 'env-sofia-ok', missionId: 'SUB-SOFIA', agentId: 'Sofia', pane: 'workspace', state: 'COMPLETED', required: true },
+    { ...base, envelopeId: 'env-sofia-retry', missionId: 'SUB-SOFIA', agentId: 'Sofia', pane: 'workspace', state: 'UNVERIFIED', required: true },
+    { ...base, envelopeId: 'env-emily-ok', missionId: 'SUB-EMILY', agentId: 'Emily', pane: 'chat', state: 'COMPLETED', required: true },
+    { ...base, envelopeId: 'env-emily-retry', missionId: 'SUB-EMILY', agentId: 'Emily', pane: 'chat', state: 'UNVERIFIED', required: true },
+  ];
+
+  const done = parentMissionStatus('PARENT-1', attempts);
+  assert.equal(done.required, 2);
+  assert.equal(done.completed, 2);
+  assert.equal(done.active, 0);
+  assert.equal(done.closable, true);
+  assert.equal(done.attempts, 4);
+
+  const withActiveRetry = attempts.map(item => (
+    item.envelopeId === 'env-emily-retry' ? { ...item, state: 'WORKING' } : item
+  ));
+  const blocked = parentMissionStatus('PARENT-1', withActiveRetry);
+  assert.equal(blocked.required, 2);
+  assert.equal(blocked.completed, 2);
+  assert.equal(blocked.active, 1);
+  assert.equal(blocked.closable, false);
+  assert.ok(blocked.blockers.some(x => x.envelopeId === 'env-emily-retry' && x.state === 'WORKING'));
+});
+
+test('parent mission stays blocked when a logical required mission has no completed attempt', () => {
+  const attempts = [
+    { ...base, envelopeId: 'env-sofia-failed', missionId: 'SUB-SOFIA', agentId: 'Sofia', pane: 'workspace', state: 'UNVERIFIED', required: true },
+    { ...base, envelopeId: 'env-emily-ok', missionId: 'SUB-EMILY', agentId: 'Emily', pane: 'chat', state: 'COMPLETED', required: true },
+  ];
+
+  const status = parentMissionStatus('PARENT-1', attempts);
+  assert.equal(status.required, 2);
+  assert.equal(status.completed, 1);
+  assert.equal(status.closable, false);
+  assert.ok(status.blockers.some(x => x.missionId === 'SUB-SOFIA'));
 });
