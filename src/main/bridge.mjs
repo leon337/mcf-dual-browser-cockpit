@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'no
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { LiveAgentEventBus } from './live-agent-events.mjs';
+import { isGenerationStopControl } from './generation-control.mjs';
 
 const MAX_BODY = 1024 * 1024;
 const MAX_MESSAGE = 16000;
@@ -129,6 +130,8 @@ export class LocalAgentBridge {
     getAgentRecoveryCheckpoint = null,
     reconcileAgentMission = null,
     cancelAgentMission = null,
+    messageComposerReadyTimeoutMs = 30000,
+    messageComposerReadyPollMs = 250,
     onEvent = () => {},
   }) {
     this.getWorkspaceWebContents = getWorkspaceWebContents;
@@ -154,6 +157,12 @@ export class LocalAgentBridge {
     this.getAgentRecoveryCheckpoint = getAgentRecoveryCheckpoint;
     this.reconcileAgentMission = reconcileAgentMission;
     this.cancelAgentMission = cancelAgentMission;
+    this.messageComposerReadyTimeoutMs = Number.isFinite(messageComposerReadyTimeoutMs)
+      ? Math.max(0, Number(messageComposerReadyTimeoutMs))
+      : 30000;
+    this.messageComposerReadyPollMs = Number.isFinite(messageComposerReadyPollMs)
+      ? Math.max(1, Number(messageComposerReadyPollMs))
+      : 250;
     this.onEvent = onEvent;
     this.server = null;
     this.port = null;
@@ -268,6 +277,92 @@ export class LocalAgentBridge {
     if (!pane) return { ok: false, error: 'valid_message_target_required' };
     if (!normalizedMessage) return { ok: false, error: 'valid_message_required' };
     return this.#sendMessage(pane, normalizedMessage);
+  }
+
+  async #messageComposerReadiness(wc) {
+    if (!wc || wc.isDestroyed?.() || typeof wc.executeJavaScript !== 'function') {
+      return {
+        ok: false,
+        composerPresent: false,
+        composerEditable: false,
+        generationActive: false,
+        error: 'message_target_unavailable',
+      };
+    }
+
+    return wc.executeJavaScript(`(() => {
+      const MCF_MESSAGE_COMPOSER_READINESS = true;
+      const isStopControl = ${isGenerationStopControl.toString()};
+      const visible = (el) => {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        return r.width > 20 && r.height > 10
+          && s.display !== 'none'
+          && s.visibility !== 'hidden';
+      };
+      const composer = [
+        document.querySelector('#prompt-textarea'),
+        document.querySelector('textarea'),
+        ...document.querySelectorAll('[contenteditable="true"]'),
+      ].filter(Boolean).find(visible) || null;
+      const stopControl = [...document.querySelectorAll('button')].find(button =>
+        visible(button) && isStopControl({
+          ariaLabel: button.getAttribute('aria-label'),
+          testId: button.getAttribute('data-testid'),
+          title: button.title,
+          text: button.innerText,
+        })
+      ) || null;
+      const composerEditable = Boolean(composer)
+        && composer.getAttribute('aria-disabled') !== 'true'
+        && composer.getAttribute('contenteditable') !== 'false'
+        && composer.disabled !== true
+        && composer.readOnly !== true
+        && (composer.isContentEditable || 'value' in composer);
+      return {
+        ok: Boolean(composer) && composerEditable && !stopControl,
+        composerPresent: Boolean(composer),
+        composerEditable,
+        generationActive: Boolean(stopControl),
+        stopControl: stopControl ? {
+          ariaLabel: stopControl.getAttribute('aria-label') || null,
+          testId: stopControl.getAttribute('data-testid') || null,
+          title: stopControl.title || null,
+        } : null,
+      };
+    })()`, true).catch(error => ({
+      ok: false,
+      composerPresent: false,
+      composerEditable: false,
+      generationActive: false,
+      error: String(error?.message || error),
+    }));
+  }
+
+  async #waitForMessageComposerReady(wc) {
+    const deadline = Date.now() + this.messageComposerReadyTimeoutMs;
+    let last = null;
+
+    do {
+      if (!wc || wc.isDestroyed?.()) {
+        return { ok: false, error: 'message_target_unavailable', readiness: last };
+      }
+
+      last = await this.#messageComposerReadiness(wc);
+      if (last?.ok) return { ok: true, readiness: last };
+      if (Date.now() >= deadline) break;
+
+      await new Promise(resolve => setTimeout(resolve, this.messageComposerReadyPollMs));
+    } while (true);
+
+    return {
+      ok: false,
+      error: last?.generationActive
+        ? 'message_send_blocked_generation_active'
+        : 'chat_composer_not_ready',
+      readiness: last,
+    };
   }
 
   async #cleanupComposerDraft(wc) {
