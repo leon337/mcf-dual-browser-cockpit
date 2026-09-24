@@ -204,6 +204,15 @@ export class LocalAgentBridge {
     return { pane, wc };
   }
 
+  #automationTarget(value) {
+    const requested = value == null || value === '' ? 'workspace' : value;
+    const pane = normalizePaneTarget(requested);
+    if (!pane) return { ok: false, status: 400, error: 'valid_pane_required' };
+    const { wc } = this.#paneWebContents(pane);
+    if (!wc) return { ok: false, status: 503, error: 'pane_unavailable', pane };
+    return { ok: true, pane, wc };
+  }
+
   async #sendMessage(target, message) {
     const { pane, wc } = this.#paneWebContents(target);
     if (!pane) return { ok: false, error: 'invalid_message_target' };
@@ -442,16 +451,23 @@ export class LocalAgentBridge {
         return json(res, ok ? 200 : 422, { ok, targets, results });
       }
 
-      const wc = this.getWorkspaceWebContents();
-      if (!wc || wc.isDestroyed()) {
-        return json(res, 503, { ok: false, error: 'workspace_unavailable' });
+      const body = req.method === 'POST' ? await readJson(req) : null;
+      const target = this.#automationTarget(body?.pane ?? requestUrl.searchParams.get('pane'));
+      if (!target.ok) {
+        return json(res, target.status, {
+          ok: false,
+          error: target.error,
+          ...(target.pane ? { pane: target.pane } : {}),
+        });
       }
+      const { pane, wc } = target;
 
       if (req.method === 'GET' && requestUrl.pathname === '/v1/state') {
         return json(res, 200, {
           ok: true,
           state: {
             instanceId: this.instanceId,
+            pane,
             paused: this.paused,
             busy: this.busy,
             url: wc.getURL(),
@@ -465,16 +481,15 @@ export class LocalAgentBridge {
 
       if (req.method === 'GET' && requestUrl.pathname === '/v1/text') {
         const text = await wc.executeJavaScript(`(() => ({url: location.href, title: document.title, text: (document.body?.innerText || '').slice(0, 120000)}))()`, true);
-        return json(res, 200, { ok: true, page: text });
+        return json(res, 200, { ok: true, pane, page: text });
       }
 
       if (req.method === 'GET' && requestUrl.pathname === '/v1/interactive') {
         const page = await wc.executeJavaScript(pageSelectorScript(), true);
-        return json(res, 200, { ok: true, page });
+        return json(res, 200, { ok: true, pane, page });
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/v1/navigate') {
-        const body = await readJson(req);
         if (typeof body.url !== 'string' || !/^https?:\/\//i.test(body.url)) {
           return json(res, 400, { ok: false, error: 'http_or_https_url_required' });
         }
@@ -483,22 +498,20 @@ export class LocalAgentBridge {
         if (target.username || target.password) return json(res, 400, { ok: false, error: 'url_credentials_not_allowed' });
         await wc.loadURL(target.href);
         this.onEvent({ level: 'info', message: 'Bridge concluiu navegação.' });
-        return json(res, 200, { ok: true, url: wc.getURL() });
+        return json(res, 200, { ok: true, pane, url: wc.getURL() });
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/v1/action') {
-        const body = await readJson(req);
         const history = wc.navigationHistory;
         if (body.action === 'back' && history.canGoBack()) history.goBack();
         else if (body.action === 'forward' && history.canGoForward()) history.goForward();
         else if (body.action === 'reload') wc.reload();
         else if (body.action === 'stop') wc.stop();
         else return json(res, 400, { ok: false, error: 'invalid_or_unavailable_action' });
-        return json(res, 200, { ok: true });
+        return json(res, 200, { ok: true, pane });
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/v1/find-click') {
-        const body = await readJson(req);
         if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > 240) {
           return json(res, 400, { ok: false, error: 'text_required' });
         }
@@ -548,15 +561,14 @@ export class LocalAgentBridge {
             framesChecked += 1;
             const result = await frame.executeJavaScript(script, true);
             if (result?.ok) {
-              return json(res, 200, { ok: true, clicked: true, framesChecked });
+              return json(res, 200, { ok: true, pane, clicked: true, framesChecked });
             }
           } catch {}
         }
-        return json(res, 404, { ok: false, error: 'not_found', framesChecked });
+        return json(res, 404, { ok: false, pane, error: 'not_found', framesChecked });
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/v1/click') {
-        const body = await readJson(req);
         if (typeof body.selector !== 'string' || body.selector.length > 2000) {
           return json(res, 400, { ok: false, error: 'selector_required' });
         }
@@ -568,11 +580,10 @@ export class LocalAgentBridge {
           el.click();
           return {ok:true};
         })()`, true);
-        return json(res, result.ok ? 200 : 404, result);
+        return json(res, result.ok ? 200 : 404, { ...result, pane });
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/v1/type') {
-        const body = await readJson(req);
         if (typeof body.selector !== 'string' || typeof body.text !== 'string') {
           return json(res, 400, { ok: false, error: 'selector_and_text_required' });
         }
@@ -596,11 +607,10 @@ export class LocalAgentBridge {
           if (${Boolean(false)} && el.form) el.form.requestSubmit?.();
           return {ok:true};
         })()`, true);
-        return json(res, result.ok ? 200 : 400, result);
+        return json(res, result.ok ? 200 : 400, { ...result, pane });
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/v1/pointer') {
-        const body = await readJson(req);
         if (!Number.isFinite(body.x) || !Number.isFinite(body.y)) {
           return json(res, 400, { ok: false, error: 'x_y_required' });
         }
@@ -609,11 +619,10 @@ export class LocalAgentBridge {
         wc.sendInputEvent({ type: 'mouseMove', x, y });
         wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
         wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
-        return json(res, 200, { ok: true });
+        return json(res, 200, { ok: true, pane });
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/v1/upload-file') {
-        const body = await readJson(req);
         const selector = typeof body.selector === 'string' && body.selector.trim()
           ? body.selector.trim()
           : 'input[type="file"]';
@@ -691,7 +700,7 @@ export class LocalAgentBridge {
             });
           }
           this.onEvent({ level: 'ok', message: `Bridge anexou arquivo aprovado: ${path.basename(file)}` });
-          return json(res, 200, { ok: true, filename: path.basename(file) });
+          return json(res, 200, { ok: true, pane, filename: path.basename(file) });
         } finally {
           if (wc.debugger.isAttached()) {
             try { await wc.debugger.sendCommand('Page.setInterceptFileChooserDialog', { enabled: false }); } catch {}
@@ -703,16 +712,19 @@ export class LocalAgentBridge {
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/v1/capture') {
-        if (typeof this.captureWorkspace === 'function') {
+        if (pane === 'workspace' && typeof this.captureWorkspace === 'function') {
           const result = await this.captureWorkspace();
-          return json(res, result?.ok ? 200 : 500, result ?? { ok: false, error: 'capture_failed' });
+          return json(res, result?.ok ? 200 : 500, {
+            ...(result ?? { ok: false, error: 'capture_failed' }),
+            pane,
+          });
         }
         mkdirSync(this.captureDir, { recursive: true });
         const image = await wc.capturePage();
-        const filename = `workspace-${Date.now()}.png`;
+        const filename = `${pane}-${Date.now()}.png`;
         const output = path.join(this.captureDir, filename);
         writeFileSync(output, image.toPNG(), { mode: 0o600, flag: 'wx' });
-        return json(res, 200, { ok: true, path: output });
+        return json(res, 200, { ok: true, pane, path: output });
       }
 
       return json(res, 404, { ok: false, error: 'not_found' });

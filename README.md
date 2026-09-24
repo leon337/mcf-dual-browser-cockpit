@@ -22,9 +22,11 @@ O Cockpit é uma **Execution Surface**; ele não substitui o Mission Runtime ou 
 - partitions persistentes e isoladas;
 - restauração de URLs, janela e split;
 - Agent Bridge local em loopback com token efêmero;
-- navegação programática do Workspace;
+- navegação programática multipainel para `chat` (EMILLY) e `workspace` (SOPHIA);
+- leitura de estado, texto e elementos interativos por pane;
+- ações `navigate`, `action`, `find-click`, `click`, `type`, `pointer`, `upload-file` e `capture` endereçáveis por pane;
 - ação semântica `/v1/find-click`, inclusive em frames, sem exportar o DOM inteiro;
-- captura nativa única do Workspace compartilhada pelo botão visível e pelo Agent Bridge;
+- captura por pane; o Workspace mantém o capturador nativo compartilhado e o Chat usa captura direta do WebContents;
 - integração com ORCA/AT-SPI para observação semântica;
 - áudio via PipeWire/PulseAudio em Linux;
 - AppImage Linux e targets Windows via electron-builder.
@@ -81,3 +83,39 @@ MIT.
 ## Versão 0.3.0
 
 Consulte [instâncias e pausa](docs/INSTANCIAS.md), [auditoria](docs/missions/MCF-DUAL-AUDIT-20260922/AUDIT.md) e [validação](docs/missions/MCF-DUAL-AUDIT-20260922/VALIDATION.md). A Bridge inicia ligada, autenticada e limitada a loopback.
+
+
+## Agent Bridge multipainel
+
+Rotas de leitura aceitam o pane por query string:
+
+    GET /v1/state?pane=chat
+    GET /v1/text?pane=workspace
+    GET /v1/interactive?pane=chat
+
+Rotas de ação aceitam o pane no JSON:
+
+    {"pane":"chat", ...}
+    {"pane":"workspace", ...}
+
+Aliases aceitos:
+- `chat`, `emilly`, `emily` -> painel EMILLY;
+- `workspace`, `sophia`, `sofia` -> painel SOPHIA.
+
+Quando `pane` é omitido, a Bridge preserva compatibilidade e usa `workspace`.
+
+Exemplos:
+
+    POST /v1/navigate
+    {"pane":"chat","url":"https://example.com"}
+
+    POST /v1/action
+    {"pane":"workspace","action":"reload"}
+
+    POST /v1/click
+    {"pane":"chat","selector":"button[type=submit]"}
+
+    POST /v1/type
+    {"pane":"workspace","selector":"textarea","text":"texto"}
+
+A rota `/v1/pointer` também é multipainel, mas ações semânticas/programáticas continuam preferidas quando disponíveis.

@@ -157,3 +157,105 @@ test('message API targets chat and workspace without system input and broadcasts
   assert.equal(blocked.status, 429);
   assert.equal(inserted.chat.length, beforeBlocked);
 });
+
+
+test('browser automation routes target chat or workspace explicitly', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-pane-routes-'));
+  const calls = { chat: [], workspace: [] };
+
+  function fakeWebContents(pane) {
+    let currentUrl = 'https://' + pane + '.test/';
+    return {
+      isDestroyed: () => false,
+      getURL: () => currentUrl,
+      getTitle: () => pane.toUpperCase(),
+      isLoading: () => false,
+      navigationHistory: {
+        canGoBack: () => true,
+        canGoForward: () => true,
+        goBack: () => calls[pane].push(['back']),
+        goForward: () => calls[pane].push(['forward']),
+      },
+      loadURL: async url => { currentUrl = url; calls[pane].push(['navigate', url]); },
+      reload: () => calls[pane].push(['reload']),
+      stop: () => calls[pane].push(['stop']),
+      sendInputEvent: event => calls[pane].push(['input', event.type]),
+      executeJavaScript: async script => {
+        calls[pane].push(['script', script]);
+        if (script.includes('document.body?.innerText')) {
+          return { url: currentUrl, title: pane.toUpperCase(), text: 'TEXT-' + pane };
+        }
+        if (script.includes('const nodes =')) {
+          return { url: currentUrl, title: pane.toUpperCase(), nodes: [{ text: pane }] };
+        }
+        return { ok: true };
+      },
+      mainFrame: {
+        framesInSubtree: [{
+          executeJavaScript: async () => {
+            calls[pane].push(['frame-click']);
+            return { ok: true };
+          },
+        }],
+      },
+      capturePage: async () => ({ toPNG: () => Buffer.from(pane) }),
+    };
+  }
+
+  const panes = {
+    chat: fakeWebContents('chat'),
+    workspace: fakeWebContents('workspace'),
+  };
+
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => panes.workspace,
+    getPaneWebContents: pane => panes[pane] ?? null,
+    captureDir: dir,
+    instanceId: 'test',
+  });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive: true }); });
+
+  const base = 'http://127.0.0.1:' + bridge.port;
+  const auth = { Authorization: 'Bearer ' + bridge.token };
+  const get = route => fetch(base + route, { headers: auth });
+  const post = (route, body) => fetch(base + route, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const chatState = await (await get('/v1/state?pane=chat')).json();
+  assert.equal(chatState.state.pane, 'chat');
+  assert.equal(chatState.state.title, 'CHAT');
+
+  const defaultState = await (await get('/v1/state')).json();
+  assert.equal(defaultState.state.pane, 'workspace');
+  assert.equal(defaultState.state.title, 'WORKSPACE');
+
+  const chatText = await (await get('/v1/text?pane=chat')).json();
+  assert.equal(chatText.pane, 'chat');
+  assert.equal(chatText.page.text, 'TEXT-chat');
+
+  const chatInteractive = await (await get('/v1/interactive?pane=chat')).json();
+  assert.equal(chatInteractive.pane, 'chat');
+  assert.equal(chatInteractive.page.title, 'CHAT');
+
+  assert.equal((await post('/v1/navigate', { pane: 'chat', url: 'https://example.com/chat' })).status, 200);
+  assert.ok(calls.chat.some(call => call[0] === 'navigate'));
+  assert.ok(!calls.workspace.some(call => call[0] === 'navigate'));
+
+  assert.equal((await post('/v1/action', { pane: 'chat', action: 'reload' })).status, 200);
+  assert.ok(calls.chat.some(call => call[0] === 'reload'));
+
+  assert.equal((await post('/v1/find-click', { pane: 'chat', text: 'continue' })).status, 200);
+  assert.ok(calls.chat.some(call => call[0] === 'frame-click'));
+
+  assert.equal((await post('/v1/click', { pane: 'chat', selector: '#go' })).status, 200);
+  assert.equal((await post('/v1/type', { pane: 'chat', selector: '#field', text: 'abc' })).status, 200);
+  assert.equal((await post('/v1/pointer', { pane: 'chat', x: 10, y: 20 })).status, 200);
+  assert.ok(calls.chat.some(call => call[0] === 'input'));
+
+  assert.equal((await get('/v1/state?pane=other')).status, 400);
+  assert.equal((await post('/v1/navigate', { pane: 'other', url: 'https://example.com/' })).status, 400);
+});
