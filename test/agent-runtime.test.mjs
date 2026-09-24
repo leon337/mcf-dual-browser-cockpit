@@ -3103,6 +3103,21 @@ test('reconciliation requires caller evidence plus live proof and refuses active
     lateResultObserved: false,
     assistantMessageId: null,
     assistantTextLength: 0,
+    toolActivityObserved: true,
+  };
+  const externalEffect = await runtime.reconcileMission({
+    envelopeId,
+    outcome: 'no_active_execution_confirmed',
+    authority: 'LEANDRO',
+    evidence: { operatorCheckpoint: 'external-effect-check' },
+  });
+  assert.equal(externalEffect.ok, false);
+  assert.equal(externalEffect.error, 'external_effect_reconciliation_required');
+  assert.equal(runtime.getRecoveryCheckpoint({ pane: 'workspace' }).mutationAllowed, false);
+
+  observation = {
+    ...observation,
+    toolActivityObserved: false,
   };
   const illegalCancel = await runtime.reconcileMission({
     envelopeId,
