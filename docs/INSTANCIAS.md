@@ -32,3 +32,25 @@ Rotas:
 Aliases aceitos: emilly/emily -> chat e sophia/sofia -> workspace. O broadcast executa os alvos concorrentemente.
 
 A Bridge só declara sucesso quando o envio é confirmado pelo esvaziamento do compositor. Bloqueios reais do produto, como rate_limit_hard_block, são reportados por alvo e não são contornados.
+
+
+## Perfil backend-quality / notebook-team3
+
+A terceira instância usa um profile próprio e não reutiliza os bindings das equipes existentes:
+
+    --instance=notebook-team3
+    --agent-profile=backend-quality
+
+O binding canônico do profile é:
+
+- chat -> Renato — Qualidade e Testes — `docs/agentes/RENATO.md`;
+- workspace -> Eduardo — Engenharia Backend — `docs/agentes/EDUARDO.md`.
+
+O runtime mission id desse profile é `MCF-DUAL-BROWSER-TEAM3-BACKEND-QUALITY-001`.
+Como todo `--instance` possui seu próprio `userData`, a instância `notebook-team3`
+mantém cookies, runtime state, Bridge/token e sessões separados das outras instâncias.
+Profile desconhecido falha fechado durante a inicialização.
+
+A presença deste profile no binário não autoriza lançamento operacional. Antes de usar
+`notebook-team3`, valide isolamento de instance/userData/Bridge/token/session, handshake
+dos dois agentes, ausência de cross-instance routing e comportamento após restart.

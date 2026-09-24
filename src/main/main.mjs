@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LocalAgentBridge } from './bridge.mjs';
 import { PaneAgentRuntime } from './agent-runtime.mjs';
-import { agentBindingsForProfile } from './agent-identity.mjs';
+import { agentBindingsForProfile, agentMissionIdForProfile } from './agent-identity.mjs';
 import { isGenerationStopControl, isTargetGenerationActive } from './generation-control.mjs';
 import { instanceConfig, atomicJson } from './instance.mjs';
 
@@ -43,9 +43,7 @@ let paneAgentRuntime = null;
 let restoredRuntimeState = null;
 let runtimePersistTimer = null;
 const RUNTIME_STATE_VERSION = 1;
-const PANE_AGENT_MISSION_ID = instance.agentProfile === 'debug-engineering'
-  ? 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003'
-  : 'MCF-DUAL-AGENT-IDENTITY-001';
+const PANE_AGENT_MISSION_ID = agentMissionIdForProfile(instance.agentProfile);
 
 const viewState = {
   chat: { url: CHATGPT_URL, title: 'ChatGPT', loading: true, canGoBack: false, canGoForward: false },
@@ -1773,7 +1771,12 @@ function createWindow() {
         error: error.message,
       }));
       if (bootstrap?.ok) {
-        emitBridgeEvent({ level: 'ok', message: 'MCF Agent Identity: Emily e Sofia READY.' });
+        emitBridgeEvent({
+          level: 'ok',
+          message: 'MCF Agent Identity: '
+            + Object.values(agentBindings).map(binding => binding.agentId).join(' e ')
+            + ' READY.',
+        });
       } else {
         emitBridgeEvent({
           level: 'error',
