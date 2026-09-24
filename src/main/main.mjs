@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { LocalAgentBridge } from './bridge.mjs';
 import { PaneAgentRuntime } from './agent-runtime.mjs';
 import { agentBindingsForProfile } from './agent-identity.mjs';
-import { isGenerationStopControl } from './generation-control.mjs';
+import { isGenerationStopControl, isTargetGenerationActive } from './generation-control.mjs';
 import { instanceConfig, atomicJson } from './instance.mjs';
 
 const instance = instanceConfig(process.argv, app.getPath('userData'));
@@ -92,6 +92,13 @@ function emitState(key, wc) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('browser:state', { pane: key, ...viewState[key] });
   }
+  bridge?.publishLiveEvent({
+    type: 'PANE_STATE',
+    source: 'WebContents',
+    authority: 'observational',
+    pane: key,
+    state: { ...viewState[key] },
+  });
 }
 
 function emitBridgeEvent(payload) {
@@ -590,7 +597,12 @@ async function waitForAssistantStart(
 
 async function waitForAssistantResult(
   pane,
-  { marker = null, assistantMessageId = null, userMessageId = null },
+  {
+    marker = null,
+    assistantMessageId = null,
+    userMessageId = null,
+    expectedConversationUrl = null,
+  },
   timeoutMs = 120000,
 ) {
   const wc = getPane(pane);
@@ -598,14 +610,44 @@ async function waitForAssistantResult(
     return { ok: false, generationFinished: false, terminalSignal: 'pane_unavailable' };
   }
 
+  let expectedConversationId = null;
+  try {
+    const parsedExpected = new URL(expectedConversationUrl);
+    expectedConversationId = parsedExpected.pathname.match(/\/c\/([^/]+)/)?.[1] ?? null;
+  } catch {}
+
   const deadline = Date.now() + timeoutMs;
   let lastMessageId = null;
   let lastText = '';
   let stableSince = 0;
+  let anchorMissingSince = 0;
 
   while (Date.now() < deadline) {
     if (wc.isDestroyed()) {
       return { ok: false, generationFinished: false, terminalSignal: 'pane_destroyed' };
+    }
+
+    if (expectedConversationId && !wc.isLoading()) {
+      const currentUrl = wc.getURL();
+      let currentConversationId = null;
+      try {
+        currentConversationId = new URL(currentUrl).pathname.match(/\/c\/([^/]+)/)?.[1] ?? null;
+      } catch {}
+      if (currentConversationId !== expectedConversationId) {
+        return {
+          ok: false,
+          generationFinished: false,
+          generationActive: null,
+          terminalSignal: 'conversation_changed',
+          expectedConversationId,
+          currentConversationId,
+          assistantMessageId: lastMessageId ?? assistantMessageId ?? null,
+          linkedUserMessageId: userMessageId ?? null,
+          url: currentUrl,
+          stableForMs: 0,
+          finalActionsObserved: false,
+        };
+      }
     }
 
     const snapshot = await wc.executeJavaScript(
@@ -614,6 +656,7 @@ async function waitForAssistantResult(
         const acceptedAssistantMessageId = ${JSON.stringify(assistantMessageId)};
         const userMessageId = ${JSON.stringify(userMessageId)};
         const isStopControl = ${isGenerationStopControl.toString()};
+        const targetGenerationActive = ${isTargetGenerationActive.toString()};
         const visible = (el) => {
           if (!el) return false;
           const rect = el.getBoundingClientRect();
@@ -635,6 +678,16 @@ async function waitForAssistantResult(
             node.getAttribute('data-message-author-role') === 'user'
             && node.getAttribute('data-message-id') === userMessageId
           );
+          if (userIndex < 0) {
+            return {
+              found: false,
+              anchorMissing: true,
+              generationActive: null,
+              finalActionsObserved: false,
+              linkedUserMessageId: userMessageId,
+              url: location.href,
+            };
+          }
           if (userIndex >= 0) {
             linkedUserMessageId = userMessageId;
             const userNode = allMessages[userIndex];
@@ -702,6 +755,11 @@ async function waitForAssistantResult(
           && String(acceptedAssistantMessageId).startsWith('request-placeholder-')
           ? acceptedAssistantMessageId
           : null;
+        const messageIndex = allMessages.indexOf(message);
+        const laterUserMessageObserved = messageIndex >= 0
+          && allMessages.slice(messageIndex + 1).some(node =>
+            node.getAttribute('data-message-author-role') === 'user'
+          );
         const stopControl = [...document.querySelectorAll('button')].find(button => {
           if (!visible(button)) return false;
           return isStopControl({
@@ -753,7 +811,11 @@ async function waitForAssistantResult(
           assistantIdMigratedFrom,
           interrupted,
           interruptionText: interrupted ? turnText.slice(0, 500) : null,
-          generationActive: Boolean(stopControl),
+          generationActive: targetGenerationActive({
+            stopControlPresent: Boolean(stopControl),
+            laterUserMessageObserved,
+          }),
+          laterUserMessageObserved,
           finalActionsObserved,
           url: location.href,
         };
@@ -789,12 +851,31 @@ async function waitForAssistantResult(
     }
 
     if (!snapshot?.found) {
+      if (snapshot?.anchorMissing) {
+        if (!anchorMissingSince) anchorMissingSince = Date.now();
+        if (Date.now() - anchorMissingSince >= 5000) {
+          return {
+            ok: false,
+            generationFinished: false,
+            generationActive: snapshot?.generationActive ?? null,
+            terminalSignal: 'conversation_anchor_lost',
+            assistantMessageId: lastMessageId ?? assistantMessageId ?? null,
+            linkedUserMessageId: userMessageId ?? null,
+            url: snapshot?.url ?? wc.getURL(),
+            stableForMs: 0,
+            finalActionsObserved: false,
+          };
+        }
+      } else {
+        anchorMissingSince = 0;
+      }
       lastMessageId = null;
       lastText = '';
       stableSince = 0;
       await sleep(400);
       continue;
     }
+    anchorMissingSince = 0;
 
     const now = Date.now();
     if (snapshot.assistantMessageId === lastMessageId && snapshot.text === lastText) {
@@ -924,6 +1005,7 @@ function createPaneAgentIdentityRuntime() {
     loadState: loadPaneAgentState,
     saveState: savePaneAgentState,
     startupReady: false,
+    onEvent: (event) => bridge?.publishLiveEvent(event),
   });
 }
 
@@ -1368,6 +1450,7 @@ function createWindow() {
     getPaneWebContents: getPane,
     captureDir,
     instanceId: instance.id,
+    agentProfile: instance.agentProfile,
     uploadDir,
     captureWorkspace,
     openAgentSession,

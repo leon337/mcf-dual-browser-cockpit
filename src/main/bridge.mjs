@@ -2,6 +2,7 @@ import http from 'node:http';
 import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { LiveAgentEventBus } from './live-agent-events.mjs';
 
 const MAX_BODY = 1024 * 1024;
 const MAX_MESSAGE = 16000;
@@ -113,6 +114,7 @@ export class LocalAgentBridge {
     getPaneWebContents = null,
     captureDir,
     instanceId = 'principal',
+    agentProfile = null,
     uploadDir = null,
     captureWorkspace = null,
     openAgentSession = null,
@@ -132,6 +134,7 @@ export class LocalAgentBridge {
       : (pane) => pane === 'workspace' ? this.getWorkspaceWebContents?.() : null;
     this.captureDir = captureDir;
     this.instanceId = instanceId;
+    this.agentProfile = agentProfile;
     this.paused = false;
     this.busy = false;
     this.uploadDir = uploadDir;
@@ -149,18 +152,31 @@ export class LocalAgentBridge {
     this.server = null;
     this.port = null;
     this.token = randomBytes(24).toString('base64url');
+    this.liveEvents = new LiveAgentEventBus({
+      instanceId: this.instanceId,
+      agentProfile: this.agentProfile,
+    });
   }
 
   getState() {
     return {
       enabled: Boolean(this.server),
       instanceId: this.instanceId,
+      agentProfile: this.agentProfile,
       paused: this.paused,
       busy: this.busy,
       host: '127.0.0.1',
       port: this.port,
       token: this.server ? this.token : null,
     };
+  }
+
+  publishLiveEvent(event) {
+    return this.liveEvents.publish(event);
+  }
+
+  getLiveEventSnapshot(after = 0) {
+    return this.liveEvents.snapshot(after);
   }
 
   setPaused(paused) {
@@ -192,6 +208,12 @@ export class LocalAgentBridge {
     this.server = server;
     const address = server.address();
     this.port = typeof address === 'object' && address ? address.port : preferredPort;
+    this.publishLiveEvent({
+      type: 'BRIDGE_STARTED',
+      source: 'LocalAgentBridge',
+      authority: 'infrastructure',
+      bridge: { host: '127.0.0.1', port: this.port },
+    });
     this.onEvent({ level: 'ok', message: `Agent Bridge ativo em 127.0.0.1:${this.port}` });
     return this.getState();
   }
@@ -199,6 +221,13 @@ export class LocalAgentBridge {
   async stop() {
     if (!this.server) return this.getState();
     const server = this.server;
+    this.publishLiveEvent({
+      type: 'BRIDGE_STOPPING',
+      source: 'LocalAgentBridge',
+      authority: 'infrastructure',
+      bridge: { host: '127.0.0.1', port: this.port },
+    });
+    this.liveEvents.disconnectAll();
     this.server = null;
     this.port = null;
     await new Promise((resolve) => { server.close(() => resolve()); server.closeAllConnections(); });
@@ -631,10 +660,50 @@ export class LocalAgentBridge {
         return json(res, 401, { ok: false, error: 'unauthorized' });
       }
 
-      if (req.headers['x-mcf-instance'] && req.headers['x-mcf-instance'] !== this.instanceId) {
+      const liveSnapshotRoute = req.method === 'GET'
+        && ['/v1/live/snapshot', '/v1/events/snapshot'].includes(requestUrl.pathname);
+      const liveStreamRoute = req.method === 'GET'
+        && ['/v1/live/stream', '/v1/events'].includes(requestUrl.pathname);
+      const liveRoute = liveSnapshotRoute || liveStreamRoute;
+      const requestedInstance = req.headers['x-mcf-instance'];
+
+      if (liveRoute && !requestedInstance) {
+        return json(res, 400, { ok: false, error: 'instance_header_required' });
+      }
+      if (requestedInstance && requestedInstance !== this.instanceId) {
         return json(res, 409, { ok: false, error: 'instance_mismatch' });
       }
       res.setHeader('x-mcf-instance', this.instanceId);
+
+      if (liveSnapshotRoute) {
+        const after = requestUrl.searchParams.get('after')
+          ?? req.headers['last-event-id']
+          ?? null;
+        const eventSnapshot = this.getLiveEventSnapshot(after);
+        const [agents, missions] = await Promise.all([
+          typeof this.getAgentIdentities === 'function' ? this.getAgentIdentities() : [],
+          typeof this.listAgentMissions === 'function' ? this.listAgentMissions() : [],
+        ]);
+        return json(res, 200, {
+          ok: true,
+          ...eventSnapshot,
+          agents,
+          missions,
+        });
+      }
+
+      if (liveStreamRoute) {
+        const accept = String(req.headers.accept || '').toLowerCase();
+        if (!accept.split(',').some(item => item.trim().startsWith('text/event-stream'))) {
+          return json(res, 406, { ok: false, error: 'event_stream_accept_required' });
+        }
+        const after = requestUrl.searchParams.get('after')
+          ?? req.headers['last-event-id']
+          ?? null;
+        this.liveEvents.attach(req, res, { after });
+        return;
+      }
+
       if (req.method === 'POST') {
         if (this.paused) return json(res, 423, { ok: false, error: 'automation_paused' });
         if (this.busy) return json(res, 409, { ok: false, error: 'automation_busy' });

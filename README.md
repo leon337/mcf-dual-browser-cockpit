@@ -189,3 +189,79 @@ Em validações operacionais de lifecycle, o MESTRE deve cruzar:
     + screenshot da interface visível
 
 Uma divergência entre essas camadas bloqueia o closeout até ser explicada ou corrigida.
+
+
+## Canal live MESTRE ↔ agentes — v0.6.0
+
+A Bridge expõe um canal de eventos semânticos **read-only**, autenticado e isolado por instância. O runtime de missões continua sendo a única fonte de verdade; o stream não executa missões nem decide terminalidade.
+
+Rotas:
+
+    GET /v1/live/snapshot
+    GET /v1/live/stream
+
+Headers obrigatórios:
+
+    Authorization: Bearer <bridge-token>
+    X-MCF-Instance: <instance-id>
+
+O stream também exige:
+
+    Accept: text/event-stream
+
+O token nunca é aceito em query string. Host inválido, Origin de navegador, token ausente/inválido e instância divergente continuam falhando fechados.
+
+### Snapshot
+
+/v1/live/snapshot retorna:
+
+- instanceId e agentProfile;
+- bootId;
+- highWatermarkEventId;
+- buffer replayável recente;
+- identidades atuais;
+- missões atuais.
+
+Para evitar perda na fronteira snapshot → stream, o consumidor deve guardar highWatermarkEventId e abrir o stream a partir desse cursor. Eventos ocorridos durante a leitura do snapshot podem reaparecer no replay; o consumidor deduplica por eventId.
+
+### SSE e replay
+
+Os IDs têm o formato:
+
+    <bootId>:<sequence>
+
+O buffer é bounded por quantidade, idade e bytes. Heartbeats são comentários SSE e não avançam cursor.
+
+Quando o cursor ainda existe no mesmo boot, somente eventos posteriores são reproduzidos. Se o cursor expirou, é inválido ou pertence a outro boot, o stream emite channel.replay_reset explicitamente. O cliente deve reconciliar por snapshot em vez de presumir continuidade.
+
+Eventos principais:
+
+- BRIDGE_STARTED / BRIDGE_STOPPING;
+- PANE_STATE — observacional;
+- AGENT_RECEIPT — autoritativo;
+- MISSION_STATE — autoritativo, incluindo WORKING, RESULT_CAPTURED, COMPLETED e falhas.
+
+Um evento MISSION_STATE terminal transporta a correlação da missão e, quando disponível, o resultado final com conversationId, assistantMessageId, linkedUserMessageId, resultSha256 e texto bounded.
+
+### Regra terminal
+
+O fluxo continua:
+
+    QUEUED -> DELIVERED -> ACCEPTED -> WORKING -> RESULT_CAPTURED -> COMPLETED
+
+O stream não altera essa máquina. Estado é persistido antes de ser publicado. COMPLETED só aparece depois do read-back e validação de integridade já exigidos pelo lifecycle.
+
+Mudança de conversa durante a observação do resultado falha fechada como UNVERIFIED e libera a fila do pane, evitando WORKING infinito. Uma geração iniciada em turno posterior não mantém artificialmente uma resposta anterior como não-terminal.
+
+### Topologia multi-instância
+
+Cada instância possui seu próprio:
+
+- processo/Bridge;
+- token;
+- bootId;
+- journal;
+- ring buffer;
+- runtime state.
+
+MESTRE multiplexa os streams de notebook e notebook-team2 no cliente. Não existe broker cross-instance nem fallback silencioso.

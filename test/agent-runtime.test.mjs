@@ -102,6 +102,7 @@ test('runtime bootstraps both canonical pane identities and persists READY hands
 
 test('runtime dispatches mission envelope only to the identity-bound pane and records truthful receipts', async () => {
   const sent = [];
+  const events = [];
   let state = null;
   const broker = {
     listAgents: async () => canonical,
@@ -127,6 +128,7 @@ test('runtime dispatches mission envelope only to the identity-bound pane and re
     loadState: () => state,
     saveState: next => { state = structuredClone(next); },
     now: () => '2026-09-24T03:11:00.000Z',
+    onEvent: event => { events.push(structuredClone(event)); },
   });
   await runtime.bootstrap();
 
@@ -156,6 +158,16 @@ test('runtime dispatches mission envelope only to the identity-bound pane and re
   const receipts = runtime.listReceipts();
   assert.ok(receipts.some(r => r.kind === 'MISSION_DELIVERED' && r.agent.agentId === 'Emily'));
   assert.ok(receipts.some(r => r.kind === 'MISSION_ACCEPTED' && r.agent.agentId === 'Emily'));
+  assert.ok(events.some(event =>
+    event.type === 'MISSION_STATE'
+    && event.mission?.missionId === 'MISSION-AUDIT-1'
+    && event.mission?.state === 'QUEUED'
+  ));
+  assert.ok(events.some(event =>
+    event.type === 'AGENT_RECEIPT'
+    && event.receipt?.kind === 'MISSION_ACCEPTED'
+    && event.receipt?.agent?.agentId === 'Emily'
+  ));
 });
 
 
@@ -245,6 +257,7 @@ test('runtime keeps parent mission blocked while agent result is still generatin
   let releaseResult;
   const terminalResult = new Promise(resolve => { releaseResult = resolve; });
   let state = null;
+  const events = [];
   const broker = {
     listAgents: async () => canonical,
     showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
@@ -266,6 +279,7 @@ test('runtime keeps parent mission blocked while agent result is still generatin
     surface,
     loadState: () => state,
     saveState: next => { state = structuredClone(next); },
+    onEvent: event => { events.push(structuredClone(event)); },
   });
   await runtime.bootstrap();
 
@@ -308,6 +322,14 @@ test('runtime keeps parent mission blocked while agent result is still generatin
   assert.match(completed.result.resultSha256, /^[a-f0-9]{64}$/);
   assert.equal(runtime.getParentMissionStatus('PARENT-1').closable, true);
 
+  const capturedStateEvent = events.find(event =>
+    event.type === 'MISSION_STATE'
+    && event.mission?.envelopeId === envelopeId
+    && event.mission?.state === 'RESULT_CAPTURED'
+  );
+  assert.equal(capturedStateEvent?.mission?.result?.bodyAvailable, false);
+  assert.equal(capturedStateEvent?.mission?.result?.text, null);
+
   const kinds = runtime.listReceipts()
     .filter(r => r.envelope?.envelopeId === envelopeId)
     .map(r => r.kind);
@@ -319,6 +341,17 @@ test('runtime keeps parent mission blocked while agent result is still generatin
     'MISSION_RESULT_CAPTURED',
     'MISSION_COMPLETED',
   ]);
+
+  const completedEvent = events.find(event =>
+    event.type === 'MISSION_STATE'
+    && event.mission?.envelopeId === envelopeId
+    && event.mission?.state === 'COMPLETED'
+  );
+  assert.ok(completedEvent);
+  assert.equal(completedEvent.mission.result.bodyAvailable, true);
+  assert.equal(completedEvent.mission.result.assistantMessageId, 'msg-final-1');
+  assert.equal(completedEvent.mission.result.resultSha256, completed.result.resultSha256);
+  assert.match(completedEvent.mission.result.text, /Parecer final completo/);
 });
 
 test('runtime blocks COMPLETED when persisted result fails read-back integrity', async () => {
@@ -525,6 +558,7 @@ test('runtime executes Emily and Sofia lifecycles concurrently while preserving 
     surface,
     loadState: () => state,
     saveState: next => { state = structuredClone(next); },
+    onEvent: event => { liveEvents.push(structuredClone(event)); },
   });
   await runtime.bootstrap();
 
@@ -777,6 +811,84 @@ test('runtime keeps WORKING across observation timeout and completes on a later 
     r.kind === 'MISSION_STILL_WORKING'
     && r.envelope?.envelopeId === dispatched.envelope.envelopeId
   ));
+});
+
+
+
+test('conversation change during result observation fails closed and releases the pane queue', async () => {
+  let state = null;
+  let resultCalls = 0;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/conv-other',
+    freshConversation: async () => {},
+    sendMessage: async pane => ({
+      ok: true, pane, method: 'button', deliveryConfirmed: true,
+      composerCleared: true, conversationAdvanced: true,
+      userMessageId: 'user-change', baselineAssistantMessageId: 'assistant-old',
+      url: 'https://chatgpt.test/' + pane + '/c/conv-original',
+    }),
+    waitForAssistantMarker: async () => true,
+    waitForAssistantStart: async () => ({
+      ok: true, accepted: true, assistantMessageId: 'assistant-change',
+      markerObserved: false, generationActive: true,
+    }),
+    waitForAssistantResult: async () => {
+      resultCalls += 1;
+      return {
+        ok: false,
+        generationFinished: false,
+        generationActive: null,
+        terminalSignal: 'conversation_changed',
+        expectedConversationId: 'conv-original',
+        currentConversationId: 'conv-other',
+        assistantMessageId: 'assistant-change',
+        linkedUserMessageId: 'user-change',
+        url: 'https://chatgpt.test/workspace/c/conv-other',
+      };
+    },
+  };
+
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-LIVE-AGENT-COMMS-001',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+  });
+  await runtime.bootstrap();
+
+  const first = await runtime.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'SUB-CONVERSATION-CHANGE',
+    parentMissionId: 'PARENT-CONVERSATION-CHANGE',
+    objective: 'Falhar fechado quando a conversa mudar.',
+  });
+  await runtime.waitForPendingMissions();
+
+  const firstMission = runtime.getMission(first.envelope.envelopeId);
+  assert.equal(resultCalls, 1);
+  assert.equal(firstMission.state, 'UNVERIFIED');
+  assert.equal(runtime.getParentMissionStatus('PARENT-CONVERSATION-CHANGE').closable, false);
+  assert.ok(runtime.listReceipts().some(r =>
+    r.kind === 'MISSION_RESULT_UNVERIFIED'
+    && r.evidence?.error === 'conversation_changed_during_result_observation'
+  ));
+
+  const second = await runtime.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'SUB-AFTER-CONVERSATION-CHANGE',
+    parentMissionId: 'PARENT-AFTER-CONVERSATION-CHANGE',
+    objective: 'Provar que a fila do pane foi liberada.',
+  });
+  assert.equal(second.ok, true);
+  assert.equal(second.queued, true);
 });
 
 
@@ -1845,4 +1957,90 @@ test('identity bootstrap recovers message_send_unconfirmed when the exact ready 
   assert.ok(kinds.includes('IDENTITY_BOOTSTRAP_DELIVERY_RECOVERED'));
   assert.ok(kinds.includes('HANDSHAKE_VERIFIED'));
   assert.equal(kinds.includes('IDENTITY_BOOTSTRAP_DELIVERY_FAILED'), false);
+});
+
+test('runtime fails closed on lost conversation anchor and releases same-pane queue', async () => {
+  let state = null;
+  const observedExpectedUrls = [];
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/conv-live',
+    freshConversation: async () => {},
+    sendMessage: async pane => ({
+      ok: true,
+      pane,
+      method: 'button',
+      url: 'https://chatgpt.test/' + pane + '/c/conv-live',
+      deliveryConfirmed: true,
+      conversationAdvanced: true,
+      userMessageId: 'user-' + pane,
+    }),
+    waitForAssistantMarker: async () => true,
+    waitForAssistantResult: async (_pane, input) => {
+      observedExpectedUrls.push(input.expectedConversationUrl);
+      if (input.envelope?.missionId === 'MISSION-ANCHOR-LOST') {
+        return {
+          ok: false,
+          generationFinished: false,
+          generationActive: null,
+          terminalSignal: 'conversation_anchor_lost',
+          assistantMessageId: null,
+          linkedUserMessageId: input.userMessageId,
+          url: input.expectedConversationUrl,
+        };
+      }
+      return {
+        ok: true,
+        generationFinished: true,
+        generationActive: false,
+        terminalSignal: 'ui_generation_inactive_with_final_actions',
+        finalActionsObserved: true,
+        stableForMs: 1600,
+        assistantMessageId: 'assistant-after-anchor-loss',
+        conversationId: 'conv-live',
+        linkedUserMessageId: input.userMessageId,
+        url: input.expectedConversationUrl,
+        text: input.marker + '\nResultado posterior válido.',
+      };
+    },
+  };
+
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-LIVE-AGENT-COMMS-001',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+  });
+  await runtime.bootstrap();
+
+  const first = await runtime.dispatchMission({
+    agentId: 'Emily',
+    missionId: 'MISSION-ANCHOR-LOST',
+    parentMissionId: 'PARENT-LIVE',
+    objective: 'Simular perda do anchor.',
+  });
+  const second = await runtime.dispatchMission({
+    agentId: 'Emily',
+    missionId: 'MISSION-AFTER-ANCHOR-LOSS',
+    parentMissionId: 'PARENT-LIVE',
+    objective: 'Provar que a fila foi liberada.',
+  });
+
+  await runtime.waitForPendingMissions();
+
+  assert.equal(runtime.getMission(first.envelope.envelopeId).state, 'UNVERIFIED');
+  assert.equal(runtime.getMission(second.envelope.envelopeId).state, 'COMPLETED');
+  assert.ok(observedExpectedUrls.every(url => url?.endsWith('/c/conv-live')));
+  assert.ok(runtime.listReceipts().some(receipt =>
+    receipt.kind === 'MISSION_RESULT_UNVERIFIED'
+    && receipt.envelope?.envelopeId === first.envelope.envelopeId
+    && receipt.evidence?.error === 'conversation_anchor_lost_during_result_observation'
+  ));
 });

@@ -20,6 +20,7 @@ export const PANE_AGENT_RUNTIME_SCHEMA = 'mcf-pane-agent-runtime/v1';
 
 const PANES = Object.freeze(['chat', 'workspace']);
 const RECEIPT_LIMIT = 500;
+const LIVE_RESULT_TEXT_LIMIT = 64000;
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -54,6 +55,47 @@ function initialState(instanceId, missionId) {
   };
 }
 
+function missionLiveView(record) {
+  if (!record) return null;
+  const resultText = record.result?.text == null ? null : String(record.result.text);
+  const exposeResultBody = record.state === 'COMPLETED';
+  return {
+    envelopeId: record.envelopeId ?? null,
+    missionId: record.missionId ?? null,
+    parentMissionId: record.parentMissionId ?? null,
+    required: record.required !== false,
+    executionId: record.executionId ?? null,
+    agentId: record.agentId ?? null,
+    role: record.role ?? null,
+    pane: record.pane ?? null,
+    sessionId: record.sessionId ?? null,
+    traceId: record.traceId ?? null,
+    state: record.state ?? null,
+    revision: record.revision ?? null,
+    attemptNumber: record.attemptNumber ?? 1,
+    retryOfEnvelopeId: record.retryOfEnvelopeId ?? null,
+    createdAt: record.createdAt ?? null,
+    updatedAt: record.updatedAt ?? null,
+    lastError: record.lastError ?? null,
+    result: record.result ? {
+      conversationId: record.result.conversationId ?? null,
+      assistantMessageId: record.result.assistantMessageId ?? null,
+      linkedUserMessageId: record.result.linkedUserMessageId ?? null,
+      resultSha256: record.result.resultSha256 ?? null,
+      capturedAt: record.result.capturedAt ?? null,
+      url: record.result.url ?? null,
+      terminalProof: clone(record.result.terminalProof ?? null),
+      text: exposeResultBody ? (resultText?.slice(0, LIVE_RESULT_TEXT_LIMIT) ?? null) : null,
+      textTruncated: Boolean(
+        exposeResultBody
+        && resultText
+        && resultText.length > LIVE_RESULT_TEXT_LIMIT
+      ),
+      bodyAvailable: exposeResultBody,
+    } : null,
+  };
+}
+
 export class PaneAgentRuntime {
   constructor({
     instanceId,
@@ -65,6 +107,7 @@ export class PaneAgentRuntime {
     saveState = () => {},
     now = () => new Date().toISOString(),
     startupReady = true,
+    onEvent = () => {},
   }) {
     if (!instanceId || !missionId || !broker || !surface) {
       throw new Error('invalid_agent_runtime_configuration');
@@ -79,6 +122,7 @@ export class PaneAgentRuntime {
     this.saveState = saveState;
     this.now = now;
     this.startupReady = Boolean(startupReady);
+    this.onEvent = typeof onEvent === 'function' ? onEvent : () => {};
     this.missionTasks = new Map();
     this.paneMissionQueues = new Map();
     const loaded = loadState();
@@ -137,9 +181,35 @@ export class PaneAgentRuntime {
     this.saveState(clone(this.state));
   }
 
+  #emit(type, payload = {}) {
+    try {
+      this.onEvent({
+        type,
+        timestamp: this.now(),
+        source: 'PaneAgentRuntime',
+        authority: 'authoritative',
+        ...clone(payload),
+      });
+    } catch {
+      // Observability must never change mission semantics.
+    }
+  }
+
   #record(receipt) {
     this.state.receipts.push(receipt);
     this.#persist();
+    this.#emit('AGENT_RECEIPT', {
+      receipt: {
+        receiptId: receipt.receiptId ?? null,
+        kind: receipt.kind ?? null,
+        status: receipt.status ?? null,
+        createdAt: receipt.createdAt ?? null,
+        agent: clone(receipt.agent ?? null),
+        session: clone(receipt.session ?? null),
+        envelope: clone(receipt.envelope ?? null),
+        evidence: clone(receipt.evidence ?? null),
+      },
+    });
     return receipt;
   }
 
@@ -176,6 +246,9 @@ export class PaneAgentRuntime {
   #storeMission(record) {
     this.state.missions[record.envelopeId] = record;
     this.#persist();
+    this.#emit('MISSION_STATE', {
+      mission: missionLiveView(record),
+    });
     return record;
   }
 
@@ -865,6 +938,8 @@ export class PaneAgentRuntime {
             assistantMessageId: acceptedAssistantMessageId,
             userMessageId,
             baselineAssistantMessageId,
+            expectedConversationUrl:
+              this.state.missions[envelope.envelopeId]?.delivery?.url ?? null,
             envelope,
             executionId,
             session,
@@ -885,6 +960,38 @@ export class PaneAgentRuntime {
               observation: 'result_observation_timeout_non_terminal',
               generationActive: result?.generationActive ?? null,
               url: this.surface.getUrl(pane) ?? null,
+            },
+            now: this.now(),
+          }));
+        }
+
+        if (['conversation_changed', 'conversation_anchor_lost'].includes(result?.terminalSignal)) {
+          const observationError = result.terminalSignal === 'conversation_changed'
+            ? 'conversation_changed_during_result_observation'
+            : 'conversation_anchor_lost_during_result_observation';
+          this.#transitionMission(envelope.envelopeId, 'UNVERIFIED', {
+            error: observationError,
+            expectedConversationId: result.expectedConversationId ?? null,
+            currentConversationId: result.currentConversationId ?? null,
+            assistantMessageId: result.assistantMessageId ?? acceptedAssistantMessageId,
+            linkedUserMessageId: result.linkedUserMessageId ?? userMessageId,
+            url: result.url ?? this.surface.getUrl(pane) ?? null,
+          });
+          return this.#record(createAgentReceipt({
+            kind: 'MISSION_RESULT_UNVERIFIED',
+            status: 'UNVERIFIED',
+            binding,
+            session,
+            envelope,
+            evidence: {
+              pane,
+              executionId,
+              error: observationError,
+              expectedConversationId: result.expectedConversationId ?? null,
+              currentConversationId: result.currentConversationId ?? null,
+              assistantMessageId: result.assistantMessageId ?? acceptedAssistantMessageId,
+              linkedUserMessageId: result.linkedUserMessageId ?? userMessageId,
+              url: result.url ?? this.surface.getUrl(pane) ?? null,
             },
             now: this.now(),
           }));
@@ -1228,12 +1335,39 @@ export class PaneAgentRuntime {
         marker: context.marker,
         assistantMessageId: context.assistantMessageId,
         userMessageId: context.userMessageId,
+        expectedConversationUrl: record.delivery?.url ?? null,
         envelope: context.envelope,
         executionId: record.executionId,
         session: context.session,
         recovery: true,
       }, 30000);
 
+
+      if (result?.terminalSignal === 'conversation_changed') {
+        this.#transitionMission(record.envelopeId, 'UNVERIFIED', {
+          error: 'result_recovery_conversation_changed',
+          expectedConversationId: result.expectedConversationId ?? null,
+          currentConversationId: result.currentConversationId ?? null,
+        });
+        this.#record(createAgentReceipt({
+          kind: 'MISSION_RESULT_UNVERIFIED',
+          status: 'UNVERIFIED',
+          binding: context.binding,
+          session: context.session,
+          envelope: context.envelope,
+          evidence: {
+            pane: record.pane,
+            executionId: record.executionId,
+            error: 'result_recovery_conversation_changed',
+            expectedConversationId: result.expectedConversationId ?? null,
+            currentConversationId: result.currentConversationId ?? null,
+            url: result.url ?? this.surface.getUrl(record.pane) ?? null,
+          },
+          now: this.now(),
+        }));
+        results.push({ envelopeId: record.envelopeId, ok: false, state: 'UNVERIFIED' });
+        continue;
+      }
 
       if (result?.terminalSignal === 'result_timeout') {
         this.#transitionMission(record.envelopeId, 'UNVERIFIED', {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isGenerationStopControl } from '../src/main/generation-control.mjs';
+import { isGenerationStopControl, isTargetGenerationActive } from '../src/main/generation-control.mjs';
 
 test('generation stop control evaluates every available signal', () => {
   assert.equal(isGenerationStopControl({
@@ -21,5 +21,23 @@ test('generation stop control evaluates every available signal', () => {
     ariaLabel: 'Iniciar Voz',
     testId: '',
     text: '',
+  }), false);
+});
+
+
+test('later user turn makes a previous assistant turn independently terminal', () => {
+  assert.equal(isTargetGenerationActive({
+    stopControlPresent: true,
+    laterUserMessageObserved: false,
+  }), true);
+
+  assert.equal(isTargetGenerationActive({
+    stopControlPresent: true,
+    laterUserMessageObserved: true,
+  }), false);
+
+  assert.equal(isTargetGenerationActive({
+    stopControlPresent: false,
+    laterUserMessageObserved: false,
   }), false);
 });

@@ -17,3 +17,10 @@ export function isGenerationStopControl({
     || label.includes('interromper resposta')
   );
 }
+
+export function isTargetGenerationActive({
+  stopControlPresent = false,
+  laterUserMessageObserved = false,
+} = {}) {
+  return Boolean(stopControlPresent) && !Boolean(laterUserMessageObserved);
+}
