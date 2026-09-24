@@ -121,6 +121,9 @@ export class LocalAgentBridge {
     bootstrapAgentIdentities = null,
     dispatchAgentMission = null,
     listAgentReceipts = null,
+    listAgentMissions = null,
+    getAgentMission = null,
+    getParentAgentMissionStatus = null,
     onEvent = () => {},
   }) {
     this.getWorkspaceWebContents = getWorkspaceWebContents;
@@ -139,6 +142,9 @@ export class LocalAgentBridge {
     this.bootstrapAgentIdentities = bootstrapAgentIdentities;
     this.dispatchAgentMission = dispatchAgentMission;
     this.listAgentReceipts = listAgentReceipts;
+    this.listAgentMissions = listAgentMissions;
+    this.getAgentMission = getAgentMission;
+    this.getParentAgentMissionStatus = getParentAgentMissionStatus;
     this.onEvent = onEvent;
     this.server = null;
     this.port = null;
@@ -229,6 +235,86 @@ export class LocalAgentBridge {
     return this.#sendMessage(pane, normalizedMessage);
   }
 
+  async #cleanupComposerDraft(wc) {
+    if (!wc || wc.isDestroyed?.() || typeof wc.executeJavaScript !== 'function') {
+      return { ok: false, cleaned: false, error: 'draft_cleanup_target_unavailable' };
+    }
+
+    const result = await wc.executeJavaScript(`(async () => {
+      const MCF_DRAFT_CLEANUP = true;
+      const visible = (el) => {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+      };
+      const findComposer = () => document.querySelector('#prompt-textarea')
+        || document.querySelector('textarea')
+        || [...document.querySelectorAll('[contenteditable="true"]')].find(visible);
+      const composer = findComposer();
+      if (!composer) return { ok:true, cleaned:true, remainingLength:0, absent:true };
+
+      const readText = () => String(
+        composer.innerText
+        || composer.value
+        || composer.textContent
+        || ''
+      ).trim();
+
+      try {
+        composer.focus();
+        if (composer.isContentEditable) {
+          const selection = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(composer);
+          selection.removeAllRanges();
+          selection.addRange(range);
+          try { document.execCommand('delete', false); } catch {}
+          if (readText()) {
+            composer.replaceChildren();
+            composer.dispatchEvent(new InputEvent('input', {
+              bubbles: true,
+              inputType: 'deleteContentBackward',
+              data: null,
+            }));
+          }
+        } else if ('value' in composer) {
+          const proto = Object.getPrototypeOf(composer);
+          const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+          if (descriptor?.set) descriptor.set.call(composer, '');
+          else composer.value = '';
+          composer.dispatchEvent(new InputEvent('input', {
+            bubbles: true,
+            inputType: 'deleteContentBackward',
+            data: null,
+          }));
+          composer.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      } catch (error) {
+        return {
+          ok:false,
+          cleaned:false,
+          error:String(error?.message || error),
+          remainingLength:readText().length,
+        };
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 80));
+      const remainingLength = readText().length;
+      return {
+        ok: remainingLength === 0,
+        cleaned: remainingLength === 0,
+        remainingLength,
+      };
+    })()`, true).catch(error => ({
+      ok: false,
+      cleaned: false,
+      error: String(error?.message || error),
+    }));
+
+    return result ?? { ok: false, cleaned: false, error: 'draft_cleanup_failed' };
+  }
+
   async #sendMessage(target, message) {
     const { pane, wc } = this.#paneWebContents(target);
     if (!pane) return { ok: false, error: 'invalid_message_target' };
@@ -238,12 +324,20 @@ export class LocalAgentBridge {
     }
 
     const prepared = await wc.executeJavaScript(`(async () => {
-      const enforceChatMode = true;
+      const enforceChatMode = ${pane === 'chat' ? 'true' : 'false'};
       const visible = (el) => {
         if (!el) return false;
         const r = el.getBoundingClientRect();
         const s = getComputedStyle(el);
         return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
+      };
+      const userMessages = [...document.querySelectorAll('[data-message-author-role="user"]')];
+      const assistantMessages = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
+      const baseline = {
+        url: location.href,
+        userMessageCount: userMessages.length,
+        lastUserMessageId: userMessages.at(-1)?.getAttribute('data-message-id') || null,
+        lastAssistantMessageId: assistantMessages.at(-1)?.getAttribute('data-message-id') || null,
       };
       const findComposer = () => document.querySelector('#prompt-textarea')
         || document.querySelector('textarea')
@@ -331,7 +425,7 @@ export class LocalAgentBridge {
       } else {
         return { ok:false, error:'chat_composer_not_editable' };
       }
-      return { ok:true };
+      return { ok:true, baseline };
     })()`, true);
 
     if (!prepared?.ok) return { ok: false, pane, error: prepared?.error || 'message_prepare_failed' };
@@ -367,36 +461,152 @@ export class LocalAgentBridge {
       return { ok:false, error:'chat_send_control_not_found' };
     })()`, true);
 
-    if (!sent?.ok) return { ok: false, pane, error: sent?.error || 'message_send_failed' };
+    if (!sent?.ok) {
+      const cleanup = await this.#cleanupComposerDraft(wc);
+      return {
+        ok: false,
+        pane,
+        error: sent?.error || 'message_send_failed',
+        cleanup,
+      };
+    }
+
+    const baselineUrl = typeof prepared?.baseline?.url === 'string'
+      ? prepared.baseline.url
+      : (typeof wc.getURL === 'function' ? wc.getURL() : '');
+    const baselineUserMessageCount = Number.isFinite(prepared?.baseline?.userMessageCount)
+      ? Number(prepared.baseline.userMessageCount)
+      : 0;
+    const baselineLastUserMessageId = prepared?.baseline?.lastUserMessageId ?? null;
+    const baselineLastAssistantMessageId = prepared?.baseline?.lastAssistantMessageId ?? null;
 
     let verification = null;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 150));
       verification = await wc.executeJavaScript(`(() => {
+        const baselineUrl = ${JSON.stringify(baselineUrl)};
+        const baselineUserMessageCount = ${baselineUserMessageCount};
+        const baselineLastUserMessageId = ${JSON.stringify(baselineLastUserMessageId)};
+        const baselineLastAssistantMessageId = ${JSON.stringify(baselineLastAssistantMessageId)};
         const composer = document.querySelector('#prompt-textarea')
           || document.querySelector('textarea')
           || document.querySelector('[contenteditable="true"]');
         const text = composer ? String(composer.innerText || composer.value || '').trim() : '';
-        return { ok:true, sent: !composer || text.length === 0, url: location.href };
+        const url = location.href;
+        const userMessages = [...document.querySelectorAll('[data-message-author-role="user"]')];
+        const assistantMessages = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
+        const userMessageCount = userMessages.length;
+        const lastUserMessageId = userMessages.at(-1)?.getAttribute('data-message-id') || null;
+        const lastAssistantMessageId = assistantMessages.at(-1)?.getAttribute('data-message-id') || null;
+        const composerCleared = !composer || text.length === 0;
+        const conversationAdvanced = Boolean(
+          (lastUserMessageId && lastUserMessageId !== baselineLastUserMessageId)
+          || userMessageCount > baselineUserMessageCount
+          || (url !== baselineUrl && /\\/c\\/[^/]+/.test(location.pathname))
+        );
+        return {
+          ok: true,
+          composerCleared,
+          conversationAdvanced,
+          sent: composerCleared && conversationAdvanced,
+          url,
+          userMessageCount,
+          lastUserMessageId,
+          lastAssistantMessageId,
+          baselineLastAssistantMessageId,
+        };
       })()`, true).catch(() => null);
       if (verification?.sent) break;
     }
 
     if (!verification?.sent) {
+      const cleanup = await this.#cleanupComposerDraft(wc);
       return {
         ok: false,
         pane,
         error: 'message_send_unconfirmed',
         method: sent.method ?? null,
+        verification,
+        cleanup,
       };
     }
 
-    this.onEvent({ level: 'ok', message: 'Bridge enviou mensagem para ' + pane + '.' });
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const postSend = await wc.executeJavaScript(`(() => {
+      const expected = ${JSON.stringify(message)};
+      const composer = document.querySelector('#prompt-textarea')
+        || document.querySelector('textarea')
+        || document.querySelector('[contenteditable="true"]');
+      const text = composer ? String(composer.innerText || composer.value || composer.textContent || '').trim() : '';
+      const normalize = value => String(value || '').replace(/\\s+/g, ' ').trim();
+      const normalizedText = normalize(text);
+      const normalizedExpected = normalize(expected);
+      const expectedProbe = normalizedExpected.slice(0, 180);
+      const automationResidual = Boolean(normalizedText) && (
+        normalizedText === normalizedExpected
+        || (expectedProbe && normalizedText.includes(expectedProbe))
+        || /MCF MISSION|parentMissionId|MCF-AGENT-LIFECYCLE|MCF_AGENT_|MCF_MISSION_/i.test(normalizedText)
+      );
+      return {
+        ok: true,
+        composerEmpty: normalizedText.length === 0,
+        composerTextLength: normalizedText.length,
+        automationResidual,
+      };
+    })()`, true).catch(error => ({
+      ok: false,
+      composerEmpty: false,
+      composerTextLength: null,
+      automationResidual: false,
+      error: String(error?.message || error),
+    }));
+
+    let postSendCleanup = null;
+    if (!postSend?.composerEmpty) {
+      if (postSend?.automationResidual) {
+        postSendCleanup = await this.#cleanupComposerDraft(wc);
+        if (!postSendCleanup?.cleaned) {
+          return {
+            ok: false,
+            pane,
+            error: 'message_postsend_draft_cleanup_failed',
+            method: sent.method ?? null,
+            verification,
+            postSend,
+            cleanup: postSendCleanup,
+          };
+        }
+      } else {
+        return {
+          ok: false,
+          pane,
+          error: 'message_postsend_draft_present',
+          method: sent.method ?? null,
+          verification,
+          postSend,
+          cleanup: {
+            cleaned: false,
+            preserved: true,
+            reason: 'unrecognized_draft_preserved',
+          },
+        };
+      }
+    }
+
+    this.onEvent({ level: 'ok', message: 'Bridge enviou mensagem confirmada para ' + pane + '.' });
     return {
       ok: true,
       pane,
       method: sent.method ?? null,
-      url: typeof wc.getURL === 'function' ? wc.getURL() : null,
+      deliveryConfirmed: true,
+      composerCleared: Boolean(verification.composerCleared),
+      conversationAdvanced: Boolean(verification.conversationAdvanced),
+      userMessageCount: verification.userMessageCount ?? null,
+      userMessageId: verification.lastUserMessageId ?? null,
+      baselineAssistantMessageId: verification.baselineLastAssistantMessageId ?? null,
+      postSendStable: Boolean(postSend?.composerEmpty || postSendCleanup?.cleaned),
+      postSendCleanup,
+      url: verification.url ?? (typeof wc.getURL === 'function' ? wc.getURL() : null),
       title: typeof wc.getTitle === 'function' ? wc.getTitle() : null,
     };
   }
@@ -494,6 +704,65 @@ export class LocalAgentBridge {
         }
         const receipts = await this.listAgentReceipts();
         return json(res, 200, { ok: true, receipts });
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/missions') {
+        if (typeof this.listAgentMissions !== 'function') {
+          return json(res, 503, { ok: false, error: 'agent_lifecycle_runtime_unavailable' });
+        }
+        const missions = await this.listAgentMissions();
+        return json(res, 200, { ok: true, missions });
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/mission-status') {
+        if (typeof this.getAgentMission !== 'function') {
+          return json(res, 503, { ok: false, error: 'agent_lifecycle_runtime_unavailable' });
+        }
+        const envelopeId = String(requestUrl.searchParams.get('envelopeId') || '').trim();
+        if (!envelopeId) {
+          return json(res, 400, { ok: false, error: 'envelope_id_required' });
+        }
+        const mission = await this.getAgentMission(envelopeId);
+        if (!mission) return json(res, 404, { ok: false, error: 'mission_not_found' });
+        return json(res, 200, { ok: true, mission });
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/mission-result') {
+        if (typeof this.getAgentMission !== 'function') {
+          return json(res, 503, { ok: false, error: 'agent_lifecycle_runtime_unavailable' });
+        }
+        const envelopeId = String(requestUrl.searchParams.get('envelopeId') || '').trim();
+        if (!envelopeId) {
+          return json(res, 400, { ok: false, error: 'envelope_id_required' });
+        }
+        const mission = await this.getAgentMission(envelopeId);
+        if (!mission) return json(res, 404, { ok: false, error: 'mission_not_found' });
+        if (!mission.result) {
+          return json(res, 409, {
+            ok: false,
+            error: 'mission_result_not_captured',
+            state: mission.state,
+            envelopeId,
+          });
+        }
+        return json(res, 200, {
+          ok: true,
+          envelopeId,
+          state: mission.state,
+          result: mission.result,
+        });
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/parent-mission-status') {
+        if (typeof this.getParentAgentMissionStatus !== 'function') {
+          return json(res, 503, { ok: false, error: 'agent_lifecycle_runtime_unavailable' });
+        }
+        const missionId = String(requestUrl.searchParams.get('missionId') || '').trim();
+        if (!missionId) {
+          return json(res, 400, { ok: false, error: 'mission_id_required' });
+        }
+        const status = await this.getParentAgentMissionStatus(missionId);
+        return json(res, 200, { ok: true, status });
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/v1/message') {

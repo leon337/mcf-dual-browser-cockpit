@@ -7,6 +7,7 @@ import {
   buildIdentityBootstrap,
   detectReadyHandshake,
   createMissionEnvelope,
+  formatMissionEnvelope,
   createAgentReceipt,
 } from '../src/main/agent-identity.mjs';
 
@@ -167,4 +168,32 @@ test('packaging includes canonical agent identity manifests', async () => {
   assert.ok(pkg.build.files.includes('agents/**/*'));
   assert.doesNotThrow(() => agentBindingForPane('chat'));
   assert.doesNotThrow(() => agentBindingForPane('workspace'));
+});
+
+
+test('mission envelope requires the exact acceptance marker as the first assistant line', () => {
+  const binding = agentBindingForPane('chat');
+  const session = {
+    sessionId: 'sess-emily-accept',
+    traceId: 'trace-emily-accept',
+    contractDigest: canonicalEmily.contractDigest,
+  };
+  const envelope = createMissionEnvelope({
+    binding,
+    session,
+    input: {
+      missionId: 'MISSION-ACCEPT',
+      agentId: 'Emily',
+      objective: 'Executar missão.',
+    },
+    envelopeId: 'env-accept',
+    now: '2026-09-24T07:30:00.000Z',
+  });
+  const formatted = formatMissionEnvelope(envelope);
+  assert.match(formatted, /FIRST ASSISTANT LINE MUST BE EXACTLY/);
+  assert.match(
+    formatted,
+    /MCF_MISSION_ACCEPTED envelope_id=env-accept agent_id=Emily/,
+  );
+  assert.match(formatted, /Do not paraphrase, translate, prefix, suffix, or omit this marker/);
 });

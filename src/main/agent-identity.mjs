@@ -130,6 +130,8 @@ export function createMissionEnvelope({
     envelopeId,
     createdAt: now,
     missionId: String(input.missionId),
+    parentMissionId: input.parentMissionId ? String(input.parentMissionId) : null,
+    required: input.required !== false,
     agent: {
       agentId: binding.agentId,
       role: binding.role,
@@ -153,12 +155,19 @@ export function createMissionEnvelope({
 }
 
 export function formatMissionEnvelope(envelope) {
+  const marker = 'MCF_MISSION_ACCEPTED envelope_id='
+    + envelope.envelopeId
+    + ' agent_id='
+    + envelope.agent.agentId;
   return [
     '[MCF MISSION ENVELOPE]',
     JSON.stringify(envelope, null, 2),
     '',
-    'Acknowledge receipt with:',
-    'MCF_MISSION_ACCEPTED envelope_id=' + envelope.envelopeId + ' agent_id=' + envelope.agent.agentId,
+    '[MCF PROTOCOL — REQUIRED ACCEPTANCE MARKER]',
+    'FIRST ASSISTANT LINE MUST BE EXACTLY:',
+    marker,
+    'Do not paraphrase, translate, prefix, suffix, or omit this marker.',
+    'Only after that exact first line, continue with the requested mission result.',
   ].join('\n');
 }
 

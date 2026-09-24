@@ -81,11 +81,49 @@ test('message API targets chat and workspace without system input and broadcasts
   function fakeWebContents(pane) {
     return {
       isDestroyed: () => false,
-      getURL: () => 'https://chatgpt.com/',
+      getURL: () => 'https://chatgpt.com/c/test-' + pane,
       getTitle: () => pane,
       isLoading: () => false,
       navigationHistory: { canGoBack: () => false, canGoForward: () => false },
-      executeJavaScript: async script => { scripts[pane].push(script); return { ok: true, sent: true }; },
+      executeJavaScript: async script => {
+        scripts[pane].push(script);
+        if (script.includes('const enforceChatMode')) {
+          return {
+            ok: true,
+            baseline: {
+              url: 'https://chatgpt.com/c/test-' + pane,
+              userMessageCount: 1,
+              lastUserMessageId: 'user-old-' + pane,
+              lastAssistantMessageId: 'assistant-old-' + pane,
+            },
+          };
+        }
+        if (script.includes('chat_send_control_not_found')) {
+          return { ok: true, method: 'button' };
+        }
+        if (script.includes('conversationAdvanced')) {
+          return {
+            ok: true,
+            composerCleared: true,
+            conversationAdvanced: true,
+            sent: true,
+            url: 'https://chatgpt.com/c/test-' + pane,
+            userMessageCount: 2,
+            lastUserMessageId: 'user-new-' + pane,
+            lastAssistantMessageId: 'assistant-old-' + pane,
+            baselineLastAssistantMessageId: 'assistant-old-' + pane,
+          };
+        }
+        if (script.includes('const expected =')) {
+          return {
+            ok: true,
+            composerEmpty: true,
+            composerTextLength: 0,
+            automationResidual: false,
+          };
+        }
+        return { ok: true };
+      },
       insertText: async value => {
         inserted[pane].push(value);
       },
@@ -146,7 +184,7 @@ test('message API targets chat and workspace without system input and broadcasts
   assert.deepEqual(payload.targets.sort(), ['chat', 'workspace']);
   assert.deepEqual(inserted.chat, ['olá emilly', 'teste simultâneo']);
   assert.deepEqual(inserted.workspace, ['teste simultâneo']);
-  assert.ok(scripts.workspace.some(script => script.includes('const enforceChatMode = true')));
+  assert.ok(scripts.workspace.some(script => script.includes('const enforceChatMode = false')));
 
   assert.equal((await request('/v1/message', { pane: 'other', message: 'x' })).status, 400);
   assert.equal((await request('/v1/message', { pane: 'chat', message: '' })).status, 400);
@@ -291,6 +329,20 @@ test('identity runtime endpoints expose agents, bootstrap, missions and receipts
       };
     },
     listAgentReceipts: async () => ([{ receiptId: 'receipt-1', status: 'DELIVERED' }]),
+    listAgentMissions: async () => ([
+      { envelopeId: 'env-1', missionId: 'MISSION-1', parentMissionId: 'PARENT-1', state: 'COMPLETED', result: { resultSha256: 'a'.repeat(64) } },
+    ]),
+    getAgentMission: async envelopeId => envelopeId === 'env-1'
+      ? { envelopeId: 'env-1', missionId: 'MISSION-1', parentMissionId: 'PARENT-1', state: 'COMPLETED', result: { resultSha256: 'a'.repeat(64) } }
+      : null,
+    getParentAgentMissionStatus: async missionId => ({
+      parentMissionId: missionId,
+      required: 1,
+      completed: 1,
+      active: 0,
+      closable: true,
+      blockers: [],
+    }),
   });
   await bridge.start(0);
   t.after(async () => { await bridge.stop(); rmSync(dir, { recursive: true }); });
@@ -324,4 +376,232 @@ test('identity runtime endpoints expose agents, bootstrap, missions and receipts
   const receipts = await (await get('/v1/agent-receipts')).json();
   assert.equal(receipts.ok, true);
   assert.equal(receipts.receipts[0].receiptId, 'receipt-1');
+
+  const missions = await (await get('/v1/missions')).json();
+  assert.equal(missions.ok, true);
+  assert.equal(missions.missions[0].state, 'COMPLETED');
+
+  const missionStatus = await (await get('/v1/mission-status?envelopeId=env-1')).json();
+  assert.equal(missionStatus.ok, true);
+  assert.equal(missionStatus.mission.envelopeId, 'env-1');
+
+  const result = await (await get('/v1/mission-result?envelopeId=env-1')).json();
+  assert.equal(result.ok, true);
+  assert.equal(result.result.resultSha256, 'a'.repeat(64));
+
+  const parent = await (await get('/v1/parent-mission-status?missionId=PARENT-1')).json();
+  assert.equal(parent.ok, true);
+  assert.equal(parent.status.closable, true);
+
+  assert.equal((await get('/v1/mission-status?envelopeId=missing')).status, 404);
+});
+
+
+test('message delivery requires conversation advancement and cleans residual draft on failure', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-message-confirm-'));
+  const scripts = [];
+  let composerText = '';
+  let userMessageCount = 4;
+  const url = 'https://chatgpt.com/g/project/c/conversation-1';
+
+  const wc = {
+    isDestroyed: () => false,
+    getURL: () => url,
+    getTitle: () => 'chat',
+    isLoading: () => false,
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    insertText: async value => { composerText = value; },
+    executeJavaScript: async script => {
+      scripts.push(script);
+      if (script.includes('const enforceChatMode')) {
+        composerText = '';
+        return {
+          ok: true,
+          baseline: { url, userMessageCount, lastUserMessageId: 'user-old', lastAssistantMessageId: 'assistant-old' },
+        };
+      }
+      if (script.includes('chat_send_control_not_found')) {
+        return { ok: true, method: 'button' };
+      }
+      if (script.includes('conversationAdvanced')) {
+        return {
+          ok: true,
+          composerCleared: false,
+          conversationAdvanced: false,
+          sent: false,
+          url,
+          userMessageCount,
+        };
+      }
+      if (script.includes('MCF_DRAFT_CLEANUP')) {
+        composerText = '';
+        return { ok: true, cleaned: true, remainingLength: 0 };
+      }
+      return { ok: true };
+    },
+  };
+
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    getPaneWebContents: pane => pane === 'chat' ? wc : null,
+    captureDir: dir,
+    instanceId: 'test',
+  });
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive: true }); });
+
+  const failed = await bridge.sendMessage('chat', 'mensagem residual');
+  assert.equal(failed.ok, false);
+  assert.equal(failed.error, 'message_send_unconfirmed');
+  assert.equal(failed.cleanup?.cleaned, true);
+  assert.equal(composerText, '');
+  assert.ok(scripts.some(script => script.includes('MCF_DRAFT_CLEANUP')));
+
+  // Now prove that an empty composer alone is not enough: conversation must advance.
+  let verificationCalls = 0;
+  wc.executeJavaScript = async script => {
+    scripts.push(script);
+    if (script.includes('const enforceChatMode')) {
+      composerText = '';
+      return { ok: true, baseline: { url, userMessageCount, lastUserMessageId: 'user-old', lastAssistantMessageId: 'assistant-old' } };
+    }
+    if (script.includes('chat_send_control_not_found')) {
+      return { ok: true, method: 'button' };
+    }
+    if (script.includes('conversationAdvanced')) {
+      verificationCalls += 1;
+      composerText = '';
+      if (verificationCalls < 2) {
+        return {
+          ok: true,
+          composerCleared: true,
+          conversationAdvanced: false,
+          sent: false,
+          url,
+          userMessageCount,
+        };
+      }
+      userMessageCount += 1;
+      return {
+        ok: true,
+        composerCleared: true,
+        conversationAdvanced: true,
+        sent: true,
+        url,
+        userMessageCount,
+        lastUserMessageId: 'user-new',
+        lastAssistantMessageId: 'assistant-old',
+        baselineLastAssistantMessageId: 'assistant-old',
+      };
+    }
+    if (script.includes('MCF_DRAFT_CLEANUP')) {
+      composerText = '';
+      return { ok: true, cleaned: true, remainingLength: 0 };
+    }
+    if (script.includes('const expected =')) {
+      return {
+        ok: true,
+        composerEmpty: true,
+        composerTextLength: 0,
+        automationResidual: false,
+      };
+    }
+    return { ok: true };
+  };
+
+  const delivered = await bridge.sendMessage('chat', 'mensagem confirmada');
+  assert.equal(delivered.ok, true);
+  assert.equal(delivered.deliveryConfirmed, true);
+  assert.ok(verificationCalls >= 2);
+});
+
+
+test('post-send stabilization cleans only automation residuals and preserves unknown drafts', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-postsend-'));
+  let mode = 'automation';
+  let cleanupCalls = 0;
+  const url = 'https://chatgpt.com/g/project/c/conversation-2';
+
+  const wc = {
+    isDestroyed: () => false,
+    getURL: () => url,
+    getTitle: () => 'chat',
+    isLoading: () => false,
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    insertText: async () => {},
+    executeJavaScript: async script => {
+      if (script.includes('const enforceChatMode')) {
+        return {
+          ok: true,
+          baseline: {
+            url,
+            userMessageCount: 2,
+            lastUserMessageId: 'user-old',
+            lastAssistantMessageId: 'assistant-old',
+          },
+        };
+      }
+      if (script.includes('chat_send_control_not_found')) {
+        return { ok: true, method: 'button' };
+      }
+      if (script.includes('conversationAdvanced')) {
+        return {
+          ok: true,
+          composerCleared: true,
+          conversationAdvanced: true,
+          sent: true,
+          url,
+          userMessageCount: 2,
+          lastUserMessageId: 'user-new',
+          lastAssistantMessageId: 'assistant-old',
+          baselineLastAssistantMessageId: 'assistant-old',
+        };
+      }
+      if (script.includes('const expected =')) {
+        return mode === 'automation'
+          ? {
+              ok: true,
+              composerEmpty: false,
+              composerTextLength: 200,
+              automationResidual: true,
+            }
+          : {
+              ok: true,
+              composerEmpty: false,
+              composerTextLength: 22,
+              automationResidual: false,
+            };
+      }
+      if (script.includes('MCF_DRAFT_CLEANUP')) {
+        cleanupCalls += 1;
+        return { ok: true, cleaned: true, remainingLength: 0 };
+      }
+      return { ok: true };
+    },
+  };
+
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    getPaneWebContents: pane => pane === 'chat' ? wc : null,
+    captureDir: dir,
+    instanceId: 'test',
+  });
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive: true }); });
+
+  const cleaned = await bridge.sendMessage(
+    'chat',
+    '[MCF MISSION ENVELOPE]\nparentMissionId: PARENT-1',
+  );
+  assert.equal(cleaned.ok, true);
+  assert.equal(cleaned.deliveryConfirmed, true);
+  assert.equal(cleaned.postSendStable, true);
+  assert.equal(cleaned.postSendCleanup?.cleaned, true);
+  assert.equal(cleanupCalls, 1);
+
+  mode = 'human';
+  const preserved = await bridge.sendMessage('chat', 'mensagem normal');
+  assert.equal(preserved.ok, false);
+  assert.equal(preserved.error, 'message_postsend_draft_present');
+  assert.equal(preserved.cleanup?.preserved, true);
+  assert.equal(preserved.cleanup?.reason, 'unrecognized_draft_preserved');
+  assert.equal(cleanupCalls, 1);
 });

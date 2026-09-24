@@ -406,6 +406,450 @@ async function waitForAssistantMarker(pane, marker, timeoutMs = 60000) {
   return false;
 }
 
+async function waitForAssistantStart(
+  pane,
+  {
+    marker = null,
+    userMessageId = null,
+    baselineAssistantMessageId = null,
+  } = {},
+  timeoutMs = 60000,
+) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) {
+    return { ok: false, accepted: false, error: 'pane_unavailable' };
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (wc.isDestroyed()) {
+      return { ok: false, accepted: false, error: 'pane_destroyed' };
+    }
+
+    const snapshot = await wc.executeJavaScript(
+      `(() => {
+        const marker = ${JSON.stringify(marker)};
+        const userMessageId = ${JSON.stringify(userMessageId)};
+        const baselineAssistantMessageId = ${JSON.stringify(baselineAssistantMessageId)};
+        const allMessages = [...document.querySelectorAll('[data-message-author-role]')];
+        const assistants = allMessages.filter(node =>
+          node.getAttribute('data-message-author-role') === 'assistant'
+        );
+        if (!assistants.length) return { found:false };
+
+        let candidate = null;
+        let linkedUserMessageId = null;
+
+        if (userMessageId) {
+          const userIndex = allMessages.findIndex(node =>
+            node.getAttribute('data-message-author-role') === 'user'
+            && node.getAttribute('data-message-id') === userMessageId
+          );
+          if (userIndex < 0) return { found:false, error:'delivered_user_message_not_found' };
+          linkedUserMessageId = userMessageId;
+          const userNode = allMessages[userIndex];
+          const turns = [...document.querySelectorAll('section[data-testid^="conversation-turn-"]')];
+          const userTurn = userNode.closest('section[data-testid^="conversation-turn-"]');
+          const userTurnIndex = turns.indexOf(userTurn);
+          const nextTurn = userTurnIndex >= 0 ? turns[userTurnIndex + 1] : null;
+          const nextTurnText = String(nextTurn?.innerText || nextTurn?.textContent || '').trim();
+          const nextTurnHasUser = Boolean(nextTurn?.querySelector('[data-message-author-role="user"]'));
+          const nextTurnHasAssistant = Boolean(nextTurn?.querySelector('[data-message-author-role="assistant"]'));
+          const interruptionButton = nextTurn
+            ? [...nextTurn.querySelectorAll('button')].find(button => {
+                const text = String(button.innerText || button.textContent || '').trim();
+                return /^(racioc[ií]nio interrompido|reasoning interrupted|generation interrupted|response interrupted)$/i.test(text);
+              })
+            : null;
+          if (nextTurn && !nextTurnHasUser && !nextTurnHasAssistant && interruptionButton) {
+            return {
+              found:false,
+              interrupted:true,
+              linkedUserMessageId,
+              interruptionText:nextTurnText.slice(0, 500),
+              url:location.href,
+            };
+          }
+          for (let i = userIndex + 1; i < allMessages.length; i += 1) {
+            const role = allMessages[i].getAttribute('data-message-author-role');
+            if (role === 'user') break;
+            if (role === 'assistant') {
+              candidate = allMessages[i];
+              break;
+            }
+          }
+        } else if (baselineAssistantMessageId) {
+          const baselineIndex = assistants.findIndex(node =>
+            node.getAttribute('data-message-id') === baselineAssistantMessageId
+          );
+          if (baselineIndex >= 0 && baselineIndex < assistants.length - 1) {
+            candidate = assistants[assistants.length - 1];
+          } else if (baselineIndex < 0) {
+            const last = assistants[assistants.length - 1];
+            const lastId = last?.getAttribute('data-message-id') || null;
+            if (lastId && lastId !== baselineAssistantMessageId) candidate = last;
+          }
+        } else {
+          candidate = assistants[assistants.length - 1];
+        }
+
+        if (!candidate) return { found:false };
+        const assistantMessageId = candidate.getAttribute('data-message-id') || null;
+        if (!assistantMessageId) return { found:false };
+
+        const text = String(candidate.innerText || candidate.textContent || '');
+        const stopControl = [...document.querySelectorAll('button')].find(button => {
+          const rect = button.getBoundingClientRect();
+          if (!(rect.width > 0 && rect.height > 0)) return false;
+          const label = String(
+            button.getAttribute('aria-label')
+            || button.getAttribute('data-testid')
+            || button.title
+            || button.innerText
+            || ''
+          ).toLowerCase();
+          return label.includes('stop generating')
+            || label.includes('parar de gerar')
+            || label === 'stop-button';
+        });
+
+        return {
+          found:true,
+          assistantMessageId,
+          linkedUserMessageId,
+          markerObserved:Boolean(marker && text.includes(marker)),
+          generationActive:Boolean(stopControl),
+          textLength:text.length,
+          url:location.href,
+        };
+      })()`,
+      true,
+    ).catch(() => null);
+
+    if (snapshot?.interrupted) {
+      return {
+        ok: false,
+        accepted: false,
+        interrupted: true,
+        error: 'assistant_interrupted',
+        terminalSignal: 'assistant_interrupted',
+        linkedUserMessageId: snapshot.linkedUserMessageId ?? userMessageId ?? null,
+        interruptionText: snapshot.interruptionText ?? null,
+        url: snapshot.url ?? wc.getURL(),
+      };
+    }
+
+    if (snapshot?.found && snapshot?.assistantMessageId) {
+      return {
+        ok: true,
+        accepted: true,
+        assistantMessageId: snapshot.assistantMessageId,
+        linkedUserMessageId: snapshot.linkedUserMessageId ?? userMessageId ?? null,
+        baselineAssistantMessageId,
+        markerObserved: Boolean(snapshot.markerObserved),
+        generationActive: Boolean(snapshot.generationActive),
+        url: snapshot.url ?? wc.getURL(),
+      };
+    }
+
+    await sleep(250);
+  }
+
+  return {
+    ok: false,
+    accepted: false,
+    error: 'assistant_start_timeout',
+    baselineAssistantMessageId,
+  };
+}
+
+async function waitForAssistantResult(
+  pane,
+  { marker = null, assistantMessageId = null, userMessageId = null },
+  timeoutMs = 120000,
+) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) {
+    return { ok: false, generationFinished: false, terminalSignal: 'pane_unavailable' };
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  let lastMessageId = null;
+  let lastText = '';
+  let stableSince = 0;
+
+  while (Date.now() < deadline) {
+    if (wc.isDestroyed()) {
+      return { ok: false, generationFinished: false, terminalSignal: 'pane_destroyed' };
+    }
+
+    const snapshot = await wc.executeJavaScript(
+      `(() => {
+        const marker = ${JSON.stringify(marker)};
+        const acceptedAssistantMessageId = ${JSON.stringify(assistantMessageId)};
+        const userMessageId = ${JSON.stringify(userMessageId)};
+        const visible = (el) => {
+          if (!el) return false;
+          const rect = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return rect.width > 0 && rect.height > 0
+            && style.display !== 'none'
+            && style.visibility !== 'hidden';
+        };
+        const allMessages = [...document.querySelectorAll('[data-message-author-role]')];
+        const assistants = allMessages.filter(node =>
+          node.getAttribute('data-message-author-role') === 'assistant'
+        );
+
+        let message = null;
+        let linkedUserMessageId = null;
+
+        if (userMessageId) {
+          const userIndex = allMessages.findIndex(node =>
+            node.getAttribute('data-message-author-role') === 'user'
+            && node.getAttribute('data-message-id') === userMessageId
+          );
+          if (userIndex >= 0) {
+            linkedUserMessageId = userMessageId;
+            const userNode = allMessages[userIndex];
+            const turns = [...document.querySelectorAll('section[data-testid^="conversation-turn-"]')];
+            const userTurn = userNode.closest('section[data-testid^="conversation-turn-"]');
+            const userTurnIndex = turns.indexOf(userTurn);
+            const nextTurn = userTurnIndex >= 0 ? turns[userTurnIndex + 1] : null;
+            const nextTurnText = String(nextTurn?.innerText || nextTurn?.textContent || '').trim();
+            const nextTurnHasUser = Boolean(nextTurn?.querySelector('[data-message-author-role="user"]'));
+            const nextTurnHasAssistant = Boolean(nextTurn?.querySelector('[data-message-author-role="assistant"]'));
+            const interruptionButton = nextTurn
+              ? [...nextTurn.querySelectorAll('button')].find(button => {
+                  const text = String(button.innerText || button.textContent || '').trim();
+                  return /^(racioc[ií]nio interrompido|reasoning interrupted|generation interrupted|response interrupted)$/i.test(text);
+                })
+              : null;
+            if (nextTurn && !nextTurnHasUser && !nextTurnHasAssistant && interruptionButton) {
+              return {
+                found: false,
+                interrupted: true,
+                generationActive: false,
+                finalActionsObserved: false,
+                linkedUserMessageId,
+                interruptionText: nextTurnText.slice(0, 500),
+                url: location.href,
+              };
+            }
+            for (let i = userIndex + 1; i < allMessages.length; i += 1) {
+              const role = allMessages[i].getAttribute('data-message-author-role');
+              if (role === 'user') break;
+              if (role === 'assistant') {
+                message = allMessages[i];
+                break;
+              }
+            }
+          }
+        }
+
+        if (!message && acceptedAssistantMessageId) {
+          message = assistants.find(node =>
+            node.getAttribute('data-message-id') === acceptedAssistantMessageId
+          ) || null;
+        }
+
+        if (!message && !acceptedAssistantMessageId) {
+          message = [...assistants].reverse().find(node =>
+            marker && String(node.innerText || node.textContent || '').includes(marker)
+          ) || null;
+        }
+
+        if (!message) {
+          return {
+            found: false,
+            generationActive: true,
+            finalActionsObserved: false,
+            linkedUserMessageId,
+          };
+        }
+
+        const text = String(message.innerText || message.textContent || '');
+        const currentAssistantMessageId = message.getAttribute('data-message-id') || null;
+        const assistantIdMigratedFrom = acceptedAssistantMessageId
+          && currentAssistantMessageId
+          && currentAssistantMessageId !== acceptedAssistantMessageId
+          && String(acceptedAssistantMessageId).startsWith('request-placeholder-')
+          ? acceptedAssistantMessageId
+          : null;
+        const stopControl = [...document.querySelectorAll('button')].find(button => {
+          if (!visible(button)) return false;
+          const label = String(
+            button.getAttribute('aria-label')
+            || button.getAttribute('data-testid')
+            || button.title
+            || button.innerText
+            || ''
+          ).toLowerCase();
+          return label.includes('stop generating')
+            || label.includes('parar de gerar')
+            || label === 'stop-button';
+        });
+
+        const turn = message.closest('section[data-testid^="conversation-turn-"]');
+        const turnText = String(turn?.innerText || turn?.textContent || '').trim();
+        const turnInterruptionButton = turn
+          ? [...turn.querySelectorAll('button')].find(button => {
+              const text = String(button.innerText || button.textContent || '').trim();
+              return /^(racioc[ií]nio interrompido|reasoning interrupted|generation interrupted|response interrupted)$/i.test(text);
+            })
+          : null;
+        const interrupted = Boolean(
+          turnInterruptionButton
+          && !turn?.querySelector('[data-message-author-role="assistant"]')
+          && !turn?.querySelector('[data-message-author-role="user"]')
+        );
+        const finalActionButtons = turn
+          ? [...turn.querySelectorAll('button')].filter(visible)
+          : [];
+        const finalActionsObserved = finalActionButtons.some(button => {
+          const label = String(
+            button.getAttribute('aria-label')
+            || button.getAttribute('data-testid')
+            || button.title
+            || button.innerText
+            || ''
+          ).toLowerCase();
+          return label.includes('copy')
+            || label.includes('copiar')
+            || label.includes('copy-turn-action-button')
+            || label.includes('add to library')
+            || label.includes('adicionar à biblioteca')
+            || label.includes('open editor')
+            || label.includes('abrir editor');
+        });
+
+        return {
+          found: true,
+          text,
+          assistantMessageId: currentAssistantMessageId,
+          linkedUserMessageId,
+          assistantIdMigratedFrom,
+          interrupted,
+          interruptionText: interrupted ? turnText.slice(0, 500) : null,
+          generationActive: Boolean(stopControl),
+          finalActionsObserved,
+          url: location.href,
+        };
+      })()`,
+      true,
+    ).catch(() => null);
+
+    if (snapshot?.interrupted) {
+      return {
+        ok: false,
+        interrupted: true,
+        generationFinished: false,
+        generationActive: false,
+        terminalSignal: 'assistant_interrupted',
+        linkedUserMessageId: snapshot.linkedUserMessageId ?? userMessageId ?? null,
+        interruptionText: snapshot.interruptionText ?? null,
+        url: snapshot.url ?? wc.getURL(),
+      };
+    }
+
+    if (snapshot?.interrupted) {
+      return {
+        ok: false,
+        interrupted: true,
+        generationFinished: false,
+        generationActive: false,
+        terminalSignal: 'assistant_interrupted',
+        assistantMessageId: snapshot.assistantMessageId ?? assistantMessageId ?? null,
+        linkedUserMessageId: snapshot.linkedUserMessageId ?? userMessageId ?? null,
+        interruptionText: snapshot.interruptionText ?? null,
+        url: snapshot.url ?? wc.getURL(),
+      };
+    }
+
+    if (!snapshot?.found) {
+      lastMessageId = null;
+      lastText = '';
+      stableSince = 0;
+      await sleep(400);
+      continue;
+    }
+
+    const now = Date.now();
+    if (snapshot.assistantMessageId === lastMessageId && snapshot.text === lastText) {
+      if (!stableSince) stableSince = now;
+    } else {
+      lastMessageId = snapshot.assistantMessageId;
+      lastText = snapshot.text;
+      stableSince = now;
+    }
+
+    const stableForMs = Math.max(0, now - stableSince);
+    const normalizedText = String(snapshot.text || '').trim();
+    const definitiveAssistantId = Boolean(snapshot.assistantMessageId)
+      && !String(snapshot.assistantMessageId).startsWith('request-placeholder-');
+    const transientText = /^(pensando|thinking)(?:\.{0,3})?$/i.test(normalizedText)
+      || /^(racioc[ií]nio interrompido|reasoning interrupted|generation interrupted|response interrupted)$/i.test(normalizedText);
+    const terminal = !snapshot.generationActive
+      && !snapshot.interrupted
+      && snapshot.finalActionsObserved
+      && definitiveAssistantId
+      && !transientText
+      && stableForMs >= 1200;
+
+    if (terminal) {
+      let conversationId = null;
+      try {
+        const parsed = new URL(snapshot.url);
+        const match = parsed.pathname.match(/\/c\/([^/]+)/);
+        conversationId = match?.[1] ?? null;
+      } catch {}
+
+      if (!conversationId) {
+        return {
+          ok: false,
+          generationFinished: false,
+          generationActive: false,
+          terminalSignal: 'conversation_identity_missing',
+          assistantMessageId: snapshot.assistantMessageId,
+          text: snapshot.text,
+          url: snapshot.url,
+          stableForMs,
+          finalActionsObserved: snapshot.finalActionsObserved,
+        };
+      }
+
+      return {
+        ok: true,
+        generationFinished: true,
+        generationActive: false,
+        terminalSignal: 'ui_generation_inactive_with_final_actions',
+        assistantMessageId: snapshot.assistantMessageId,
+        linkedUserMessageId: snapshot.linkedUserMessageId ?? userMessageId ?? null,
+        assistantIdMigratedFrom: snapshot.assistantIdMigratedFrom ?? null,
+        conversationId,
+        text: snapshot.text,
+        url: snapshot.url,
+        stableForMs,
+        finalActionsObserved: true,
+      };
+    }
+
+    await sleep(400);
+  }
+
+  return {
+    ok: false,
+    generationFinished: false,
+    generationActive: null,
+    terminalSignal: 'result_timeout',
+    assistantMessageId: lastMessageId,
+    text: lastText,
+    url: wc.getURL(),
+    stableForMs: 0,
+    finalActionsObserved: false,
+  };
+}
+
 function createPaneAgentIdentityRuntime() {
   const broker = {
     listAgents: async () => {
@@ -445,6 +889,8 @@ function createPaneAgentIdentityRuntime() {
       return { ...result, url };
     },
     waitForAssistantMarker,
+    waitForAssistantStart,
+    waitForAssistantResult,
   };
 
   return new PaneAgentRuntime({
@@ -912,6 +1358,12 @@ function createWindow() {
       return paneAgentRuntime.dispatchMission(input ?? {});
     },
     listAgentReceipts: async () => paneAgentRuntime?.listReceipts() ?? [],
+    listAgentMissions: async () => paneAgentRuntime?.listMissions() ?? [],
+    getAgentMission: async (envelopeId) => paneAgentRuntime?.getMission(envelopeId) ?? null,
+    getParentAgentMissionStatus: async (missionId) => (
+      paneAgentRuntime?.getParentMissionStatus(missionId)
+      ?? { parentMissionId: missionId, required: 0, completed: 0, active: 0, closable: false, blockers: [] }
+    ),
     onEvent: emitBridgeEvent,
   });
 
@@ -931,6 +1383,25 @@ function createWindow() {
           message: 'MCF Agent Identity: bootstrap incompleto — ' + (bootstrap?.error || 'verificar /v1/agents'),
         });
       }
+
+      void paneAgentRuntime?.recoverPersistedMissions()
+        .then((recovery) => {
+          if (!recovery?.recovered?.length) return;
+          const completed = recovery.recovered.filter(item => item.state === 'COMPLETED').length;
+          const unresolved = recovery.recovered.length - completed;
+          emitBridgeEvent({
+            level: unresolved ? 'error' : 'ok',
+            message: 'MCF Mission Recovery: '
+              + completed + ' concluída(s), '
+              + unresolved + ' não verificada(s).',
+          });
+        })
+        .catch((error) => {
+          emitBridgeEvent({
+            level: 'error',
+            message: 'MCF Mission Recovery falhou: ' + error.message,
+          });
+        });
     })
     .catch((error) => {
       persistBridgeState(null);
