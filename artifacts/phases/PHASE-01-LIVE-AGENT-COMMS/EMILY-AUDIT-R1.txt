@@ -1,0 +1,11 @@
+MCF-LIVE-AGENT-COMMS-001 — Emily R1 summary
+mission=MCF-LIVE-AGENT-COMMS-001-EMILY-FINAL-REAUDIT-R1
+envelope=e731e391-36a1-4acd-bb4f-affa0121d4da
+result_sha256=acfb7e5a57ab1756493561191deaebaef863912fb3ac3a42c998901ff058953f
+decision=FAIL
+critical=0
+high=1
+high_id=PRF-CLOSEOUT-0.6.0-001
+scope=documentation/PR metadata only
+functional_critical_or_high=none_identified
+status=REMEDIATED

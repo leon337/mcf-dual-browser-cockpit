@@ -1,0 +1,85 @@
+{
+  "status": "PASS",
+  "instanceId": "notebook-team2",
+  "bootId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4",
+  "cursorBeforeDisconnect": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:65",
+  "initialConnectedThenDisconnected": true,
+  "reconnectChannelReady": {
+    "schema": "mcf-live-agent-event-snapshot/v1",
+    "instanceId": "notebook-team2",
+    "agentProfile": "debug-engineering",
+    "bootId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4",
+    "requestedAfter": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:65",
+    "oldestEventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:1",
+    "highWatermarkEventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:80",
+    "resetRequired": false,
+    "resetReason": null,
+    "replayCount": 15
+  },
+  "envelopeId": "bebfa9f4-901f-43ff-ae4d-4f6fc1d34037",
+  "replayedMissionEvents": [
+    {
+      "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:66",
+      "type": "MISSION_STATE",
+      "state": "QUEUED",
+      "bodyAvailable": null,
+      "resultSha256": null
+    },
+    {
+      "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:68",
+      "type": "MISSION_STATE",
+      "state": "DELIVERED",
+      "bodyAvailable": null,
+      "resultSha256": null
+    },
+    {
+      "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:70",
+      "type": "MISSION_STATE",
+      "state": "DELIVERED",
+      "bodyAvailable": null,
+      "resultSha256": null
+    },
+    {
+      "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:71",
+      "type": "MISSION_STATE",
+      "state": "DELIVERED",
+      "bodyAvailable": null,
+      "resultSha256": null
+    },
+    {
+      "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:72",
+      "type": "MISSION_STATE",
+      "state": "ACCEPTED",
+      "bodyAvailable": null,
+      "resultSha256": null
+    },
+    {
+      "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:74",
+      "type": "MISSION_STATE",
+      "state": "WORKING",
+      "bodyAvailable": null,
+      "resultSha256": null
+    },
+    {
+      "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:76",
+      "type": "MISSION_STATE",
+      "state": "WORKING",
+      "bodyAvailable": null,
+      "resultSha256": null
+    },
+    {
+      "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:77",
+      "type": "MISSION_STATE",
+      "state": "RESULT_CAPTURED",
+      "bodyAvailable": false,
+      "resultSha256": "ce9414dd04fe18993f14c6ee66a2f61988d11ff236f73aba807c4e6840e636ad"
+    },
+    {
+      "eventId": "25dfbc01-b745-4f1c-9881-4be1d0540cb4:79",
+      "type": "MISSION_STATE",
+      "state": "COMPLETED",
+      "bodyAvailable": true,
+      "resultSha256": "ce9414dd04fe18993f14c6ee66a2f61988d11ff236f73aba807c4e6840e636ad"
+    }
+  ]
+}

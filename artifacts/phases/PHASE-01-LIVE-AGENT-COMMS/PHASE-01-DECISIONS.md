@@ -1,18 +1,19 @@
 # PHASE-01 Decisions
 
 1. LEANDRO authorized continuous implementation, finalization and local production deployment for this mission.
-2. Baseline: Cockpit PR #7 head 6fcc47c4b64f6f5d8b93f09b96d8f98947c9fdb8. PR #6 remains outside this merge boundary.
-3. Sofia: runtime remains authoritative; persist-before-publish; replay uses a boot epoch.
-4. Emily: no live terminal claim during active generation; gaps explicit; four-agent smoke required.
-5. Patrícia: navigation/DOM anchor loss can livelock a pane and must be bounded; later-turn generation must not block an earlier terminal answer.
-6. Rafael: semantic journal sits between runtime and transport; subscriber failure must never alter lifecycle.
-7. MESTRE implemented instance-local bootId:sequence journal, bounded replay, exact instance header and read-only SSE.
-8. RESULT_CAPTURED carries no result body; COMPLETED exposes body only after read-back integrity.
-9. Conversation change or persistent anchor loss becomes UNVERIFIED and releases the pane queue.
-10. Release source SHA fixed at c11e3984fc76a19780593d35eaabc7f903193322.
-11. Supported Node 22.23.2 qualification produced 55/55 PASS and AppImage SHA-256 07293708ed3a8ac8aa6d21cb9d6a3813db6015737ee252772edda8a0678dedce.
-12. Both local instances were promoted to 0.6.0 and four-agent smoke passed.
-13. Replay from team2 cursor :64 recovered 7 events including WORKING/RESULT_CAPTURED/COMPLETED.
-14. Emily R1 audit completed with zero Critical and one High only because PRF/PR metadata still described completed gates as outstanding.
-15. MESTRE accepted PRF-CLOSEOUT-0.6.0-001 and remediated only documentation/metadata; executable release was not changed.
-16. Final gate after this remediation is an independent Emily post-remediation re-audit.
+2. Baseline is PR #7 head 6fcc47c4…; PR #6 remains outside this merge decision.
+3. Sofia required runtime authority, persist-before-publish and a boot epoch for replay.
+4. Emily required no terminal claim during active generation, explicit replay gaps and a four-agent real smoke.
+5. Patrícia required bounded conversation/DOM anchor loss and release of same-pane queues.
+6. Rafael required a semantic journal between runtime/WebContents and SSE.
+7. MESTRE implemented instance-local bootId:sequence replay, exact instance header, heartbeat and read-only SSE.
+8. RESULT_CAPTURED carries no result body; COMPLETED carries body only after read-back integrity.
+9. Executable release code SHA is c11e3984fc76a19780593d35eaabc7f903193322.
+10. A same-version AppImage mismatch was detected during promotion and rejected as final evidence.
+11. Exact AppImage ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951 was promoted atomically to notebook and notebook-team2; the prior image remains rollback-only.
+12. Exact four-agent smoke parent MCF-LIVE-AGENT-COMMS-001-LIVE-SMOKE-R1 closed 2/2 on each instance.
+13. Deliberate disconnect/reconnect from team2 cursor ...:65 replayed 15 events and recovered a Rafael probe through WORKING, RESULT_CAPTURED and COMPLETED without redispatch.
+14. Emily R1 found no functional Critical/High; its single High concerned stale closeout documentation.
+15. The documentation finding was remediated.
+16. Emily R2 returned PASS on that remediation, but it is retained only as lineage because the production AppImage was subsequently corrected to the exact candidate.
+17. Final gate is Emily R3 against the current PRF, release code SHA c11e3984fc76a19780593d35eaabc7f903193322, exact AppImage ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951, current PR head and current CI.

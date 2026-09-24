@@ -1,0 +1,10 @@
+MCF-LIVE-AGENT-COMMS-001 — Emily R2 summary
+mission=MCF-LIVE-AGENT-COMMS-001-EMILY-POST-REMEDIATION-R2
+envelope=56d35f67-f5e3-4d7b-9f02-8b3b2ec71a4b
+result_sha256=7630b74f93c60136eb394b196d823956c7ffe94dcdbf25b8deda210324570500
+decision=PASS
+critical=0
+high=0
+blocker_PRF-CLOSEOUT-0.6.0-001=REMOVED
+status=SUPERSEDED_AS_FINAL_GATE_BY_EXACT_ARTIFACT_PROMOTION
+note=R2 remains valid only as documentation-remediation lineage. Final gate is R3 against the exact production AppImage and current closeout head.

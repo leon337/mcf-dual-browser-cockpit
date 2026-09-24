@@ -1,48 +1,45 @@
 MCF-LIVE-AGENT-COMMS-001
-PHASE-01 release validation
+PHASE-01 validation
 
-Release source SHA:
-c11e3984fc76a19780593d35eaabc7f903193322
+Executable release identity:
+version=0.6.0
+release_code_sha=c11e3984fc76a19780593d35eaabc7f903193322
+appimage_sha256=ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951
 
-Version:
-0.6.0
+Local qualification:
+npm run check=PASS
+npm test=55/55 PASS
+git diff --check=PASS
 
-Supported local qualification runtime:
-Node v22.23.2
-npm 10.9.8
+Remote executable qualification:
+GitHub Actions Checks #77
+run_id=35995227792
+conclusion=SUCCESS
+checked_sha=c11e3984fc76a19780593d35eaabc7f903193322
 
-npm run check:
+Exact local production:
+notebook=PASS
+notebook-team2=PASS
+installed AppImage hash matches candidate=ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951
+
+Four-agent exact smoke:
+PASS
+Emily=COMPLETED da133c4642590486d68515951a05b1dbf525673a3c8f6c9c50c7e58ba83f945b
+Sofia=COMPLETED 18bef27686f6b8d06745939e0b70187be1c006d36fa7c491b6517b6b528a5409
+Patrícia=COMPLETED 589cd31a8fbc8b9f2a1a0e47f73703de2408016776d9856f51144cd591946749
+Rafael=COMPLETED e3d8d8904506b7d5634115b38a2c67c039a4d68bc92244371e01a9215543e05b
+
+Replay/reconnect exact:
+PASS
+replayCount=15
+terminal body gate=PASS
+
+Instance isolation:
 PASS
 
-npm test:
-55/55 PASS
-0 fail
-0 skipped
+Audit lineage:
+R1 result=acfb7e5a57ab1756493561191deaebaef863912fb3ac3a42c998901ff058953f decision=FAIL documentation-only
+R2 result=7630b74f93c60136eb394b196d823956c7ffe94dcdbf25b8deda210324570500 decision=PASS status=SUPERSEDED_AS_FINAL_GATE
 
-git diff --check:
-PASS
-
-GitHub Actions:
-Checks #77
-run id 35995227792
-SUCCESS
-bound to release source SHA c11e3984fc76a19780593d35eaabc7f903193322
-
-AppImage:
-MCF Dual Browser Cockpit-0.6.0-linux-x86_64.AppImage
-SHA-256 07293708ed3a8ac8aa6d21cb9d6a3813db6015737ee252772edda8a0678dedce
-
-Four-agent live smoke:
-PASS
-
-Reconnect/replay:
-PASS
-
-Two-instance local deployment:
-PASS
-
-Independent audit R1:
-COMPLETED
-result SHA-256 acfb7e5a57ab1756493561191deaebaef863912fb3ac3a42c998901ff058953f
-0 Critical
-1 High documentation-only, remediated in this closeout update
+Current gate:
+EMILY_FINAL_EXACT_ARTIFACT_AUDIT_R3

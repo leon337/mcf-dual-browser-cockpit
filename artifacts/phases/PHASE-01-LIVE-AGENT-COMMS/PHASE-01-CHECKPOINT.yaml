@@ -3,39 +3,49 @@ phase_id: PHASE-01-LIVE-AGENT-COMMS
 class: C
 authority: LEANDRO
 orchestrator: MESTRE
-state: REMEDIATION_APPLIED_READY_FOR_FINAL_REAUDIT
+state: READY_FOR_FINAL_EXACT_AUDIT_R3
 baseline_sha: 6fcc47c4b64f6f5d8b93f09b96d8f98947c9fdb8
 version: 0.6.0
-release_sha: c11e3984fc76a19780593d35eaabc7f903193322
-appimage_sha256: 07293708ed3a8ac8aa6d21cb9d6a3813db6015737ee252772edda8a0678dedce
-ci:
+release_code_sha: c11e3984fc76a19780593d35eaabc7f903193322
+appimage_sha256: ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951
+executable_ci:
   workflow: Checks
   run_number: 77
   run_id: 35995227792
   conclusion: SUCCESS
   sha: c11e3984fc76a19780593d35eaabc7f903193322
-local_validation:
-  node: v22.23.2
+validation:
   check: PASS
   tests: 55/55_PASS
   diff_check: PASS
+production:
+  status: EXACT_ARTIFACT_ACTIVE
+  notebook: PASS
+  notebook_team2: PASS
 smoke:
-  status: PASS
+  parent: MCF-LIVE-AGENT-COMMS-001-LIVE-SMOKE-R1
   agents_completed: 4
-  replay: PASS
-  instance_isolation: PASS
-deployment:
-  status: LOCAL_PRODUCTION_ACTIVE
-  notebook_version: 0.6.0
-  notebook_team2_version: 0.6.0
+  notebook_closable: true
+  notebook_team2_closable: true
+  replay_disconnect_reconnect: PASS
+  replay_count: 15
+  terminal_body_gate: PASS
 audit_r1:
-  state: COMPLETED
   result_sha256: acfb7e5a57ab1756493561191deaebaef863912fb3ac3a42c998901ff058953f
+  decision: FAIL
   critical: 0
   high: 1
-  high_id: PRF-CLOSEOUT-0.6.0-001
-  remediation: APPLIED_DOCUMENTATION_ONLY
-next_gate: EMILY_POST_REMEDIATION_REAUDIT
+  scope: DOCUMENTATION_ONLY
+  remediation: APPLIED
+audit_r2:
+  result_sha256: 7630b74f93c60136eb394b196d823956c7ffe94dcdbf25b8deda210324570500
+  decision: PASS
+  critical: 0
+  high: 0
+  status: SUPERSEDED_AS_FINAL_GATE_BY_EXACT_ARTIFACT_PROMOTION
+next_gate: EMILY_FINAL_EXACT_ARTIFACT_AUDIT_R3
+authorization:
+  finalize_and_production: AUTHORIZED_BY_LEANDRO
 prohibitions:
   - do_not_merge_pr_6_without_separate_leandro_decision
   - do_not_delete_mcf_agent_lifecycle_002_untracked_evidence
