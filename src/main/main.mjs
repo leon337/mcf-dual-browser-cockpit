@@ -1097,6 +1097,7 @@ async function cancelAssistantGeneration(
   pane,
   {
     expectedConversationUrl = null,
+    expectedUserMessageId = null,
     envelopeId = null,
     executionId = null,
   } = {},
@@ -1139,6 +1140,20 @@ async function cancelAssistantGeneration(
           && style.display !== 'none'
           && style.visibility !== 'hidden';
       };
+      const expectedUserMessageId = ${JSON.stringify(expectedUserMessageId)};
+      if (expectedUserMessageId) {
+        const userMessages = [...document.querySelectorAll('[data-message-author-role="user"]')];
+        const lastUserMessageId = userMessages.at(-1)?.getAttribute('data-message-id') || null;
+        if (lastUserMessageId !== expectedUserMessageId) {
+          return {
+            ok:false,
+            error:'cancel_user_turn_mismatch',
+            expectedUserMessageId,
+            lastUserMessageId,
+            url:location.href,
+          };
+        }
+      }
       const controls = [...document.querySelectorAll('button')].filter(button =>
         visible(button) && isStopControl({
           ariaLabel: button.getAttribute('aria-label'),

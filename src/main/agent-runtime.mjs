@@ -356,6 +356,7 @@ export class PaneAgentRuntime {
     } else if (typeof this.surface.cancelAssistantGeneration === 'function') {
       cancellationSignal = await this.surface.cancelAssistantGeneration(updated.pane, {
         expectedConversationUrl: updated.delivery?.url ?? null,
+        expectedUserMessageId: updated.delivery?.userMessageId ?? null,
         envelopeId: updated.envelopeId,
         executionId: updated.executionId,
       });
@@ -1417,6 +1418,7 @@ export class PaneAgentRuntime {
             && typeof this.surface.cancelAssistantGeneration === 'function') {
           const cancellationSignal = await this.surface.cancelAssistantGeneration(pane, {
             expectedConversationUrl: delivery?.url ?? null,
+            expectedUserMessageId: delivery?.userMessageId ?? null,
             envelopeId: envelope.envelopeId,
             executionId,
           });
@@ -1503,7 +1505,10 @@ export class PaneAgentRuntime {
 
         let acceptance = null;
         if (typeof this.surface.waitForAssistantStart === 'function') {
+          const assistantStartBeganAt = Date.now();
+          const assistantStartHardDeadline = assistantStartBeganAt + this.assistantStartHardTimeoutMs;
           while (true) {
+            const remainingMs = Math.max(250, assistantStartHardDeadline - Date.now());
             acceptance = await this.surface.waitForAssistantStart(pane, {
               marker,
               envelope,
@@ -1511,17 +1516,43 @@ export class PaneAgentRuntime {
               session,
               userMessageId,
               baselineAssistantMessageId,
-            });
+            }, Math.min(60000, remainingMs));
 
+            const nowMs = Date.now();
+            const lastActivityAt = Number(acceptance?.lastActivityAt);
+            const activitySeen = Boolean(
+              acceptance?.generationActive === true
+              || acceptance?.activityObserved === true
+              || acceptance?.positiveActivityObserved === true
+            );
+            const activityFresh = activitySeen && (
+              !Number.isFinite(lastActivityAt)
+              || nowMs - lastActivityAt <= this.activityLeaseMs
+            );
+            const hardDeadlineReached = nowMs >= assistantStartHardDeadline;
             const positiveActivityTimeout = !acceptance?.accepted
               && !acceptance?.interrupted
               && acceptance?.error === 'assistant_start_timeout'
-              && (
-                acceptance?.generationActive === true
-                || acceptance?.activityObserved === true
-                || acceptance?.positiveActivityObserved === true
-              );
-            if (!positiveActivityTimeout) break;
+              && activityFresh
+              && !hardDeadlineReached;
+
+            if (!positiveActivityTimeout) {
+              if (!acceptance?.accepted
+                  && !acceptance?.interrupted
+                  && acceptance?.error === 'assistant_start_timeout'
+                  && (hardDeadlineReached || (activitySeen && !activityFresh))) {
+                acceptance = {
+                  ...acceptance,
+                  error: hardDeadlineReached
+                    ? 'assistant_start_hard_timeout'
+                    : 'assistant_activity_lease_expired',
+                  hardDeadlineReached,
+                  activityLeaseExpired: activitySeen && !activityFresh,
+                  observationElapsedMs: nowMs - assistantStartBeganAt,
+                };
+              }
+              break;
+            }
 
             this.#record(createAgentReceipt({
               kind: 'MISSION_ACCEPTANCE_STILL_WAITING',
@@ -1540,6 +1571,9 @@ export class PaneAgentRuntime {
                 activityObserved: Boolean(acceptance?.activityObserved),
                 positiveActivityObserved: Boolean(acceptance?.positiveActivityObserved),
                 lastActivityAt: acceptance?.lastActivityAt ?? null,
+                activityLeaseMs: this.activityLeaseMs,
+                assistantStartHardTimeoutMs: this.assistantStartHardTimeoutMs,
+                observationElapsedMs: nowMs - assistantStartBeganAt,
                 url: acceptance?.url ?? this.surface.getUrl(pane) ?? null,
               },
               now: this.now(),
@@ -1727,7 +1761,10 @@ export class PaneAgentRuntime {
         }));
 
         let result = null;
+        const resultObservationBeganAt = Date.now();
+        const resultHardDeadline = resultObservationBeganAt + this.resultHardTimeoutMs;
         while (true) {
+          const remainingMs = Math.max(250, resultHardDeadline - Date.now());
           result = await this.surface.waitForAssistantResult(pane, {
             marker,
             assistantMessageId: acceptedAssistantMessageId,
@@ -1738,9 +1775,42 @@ export class PaneAgentRuntime {
             envelope,
             executionId,
             session,
-          });
+          }, Math.min(120000, remainingMs));
 
           if (result?.terminalSignal !== 'result_timeout') break;
+
+          const nowMs = Date.now();
+          if (nowMs >= resultHardDeadline) {
+            this.#storeMission({
+              ...this.state.missions[envelope.envelopeId],
+              reconciliationRequired: true,
+              reconciliationReason: 'result_hard_timeout',
+            });
+            this.#transitionMission(envelope.envelopeId, 'UNVERIFIED', {
+              error: 'result_hard_timeout',
+              terminalSignal: 'result_timeout',
+              observationElapsedMs: nowMs - resultObservationBeganAt,
+            });
+            return this.#record(createAgentReceipt({
+              kind: 'MISSION_RESULT_UNVERIFIED',
+              status: 'UNVERIFIED',
+              binding,
+              session,
+              envelope,
+              evidence: {
+                pane,
+                executionId,
+                assistantMessageId: acceptedAssistantMessageId,
+                error: 'result_hard_timeout',
+                terminalSignal: 'result_timeout',
+                reconciliationRequired: true,
+                resultHardTimeoutMs: this.resultHardTimeoutMs,
+                observationElapsedMs: nowMs - resultObservationBeganAt,
+                url: this.surface.getUrl(pane) ?? null,
+              },
+              now: this.now(),
+            }));
+          }
 
           this.#record(createAgentReceipt({
             kind: 'MISSION_STILL_WORKING',
@@ -1754,6 +1824,8 @@ export class PaneAgentRuntime {
               assistantMessageId: acceptedAssistantMessageId,
               observation: 'result_observation_timeout_non_terminal',
               generationActive: result?.generationActive ?? null,
+              resultHardTimeoutMs: this.resultHardTimeoutMs,
+              observationElapsedMs: nowMs - resultObservationBeganAt,
               url: this.surface.getUrl(pane) ?? null,
             },
             now: this.now(),
@@ -1962,10 +2034,28 @@ export class PaneAgentRuntime {
           }));
         }
 
+        const beforeCompletion = this.state.missions[envelope.envelopeId];
+        this.#storeMission({
+          ...beforeCompletion,
+          reconciliationRequired: false,
+          reconciliationReason: null,
+          reconciliationOutcome: beforeCompletion?.cancellationRequested
+            ? 'result_completed_after_cancel_request'
+            : beforeCompletion?.reconciliationOutcome ?? 'result_validated',
+          reconciledAt: beforeCompletion?.reconciliationRequired || beforeCompletion?.cancellationRequested
+            ? this.now()
+            : beforeCompletion?.reconciledAt ?? null,
+          cancellationOutcome: beforeCompletion?.cancellationRequested
+            ? 'too_late_result_completed'
+            : beforeCompletion?.cancellationOutcome ?? null,
+        });
         this.#transitionMission(envelope.envelopeId, 'COMPLETED', {
           assistantMessageId: capture.assistantMessageId,
           conversationId: capture.conversationId,
           resultSha256: capture.resultSha256,
+          cancellationOutcome: beforeCompletion?.cancellationRequested
+            ? 'too_late_result_completed'
+            : null,
         });
         return this.#record(createAgentReceipt({
           kind: 'MISSION_COMPLETED',
@@ -2022,6 +2112,11 @@ export class PaneAgentRuntime {
         const context = this.#missionContext(record);
         const persisted = this.loadState()?.missions?.[record.envelopeId]?.result ?? record.result;
         if (!verifyResultCapture(persisted)) {
+          this.#storeMission({
+            ...this.state.missions[record.envelopeId],
+            reconciliationRequired: true,
+            reconciliationReason: 'restart_result_integrity_failed',
+          });
           this.#transitionMission(record.envelopeId, 'UNVERIFIED', {
             error: 'restart_result_integrity_failed',
           });
@@ -2125,6 +2220,12 @@ export class PaneAgentRuntime {
         .includes(interruptedFrom);
       if (!context.userMessageId && !context.assistantMessageId
           && !legacyRecoverableWithoutAnchor) {
+        this.#storeMission({
+          ...this.state.missions[record.envelopeId],
+          reconciliationRequired: true,
+          reconciliationReason: 'recovery_delivery_anchor_missing',
+          recoveryResumeRequired: false,
+        });
         this.#transitionMission(record.envelopeId, 'UNVERIFIED', {
           error: 'recovery_delivery_anchor_missing',
         });
@@ -2146,6 +2247,12 @@ export class PaneAgentRuntime {
       }
 
       if (typeof this.surface.waitForAssistantResult !== 'function') {
+        this.#storeMission({
+          ...this.state.missions[record.envelopeId],
+          reconciliationRequired: true,
+          reconciliationReason: 'result_recovery_surface_unavailable',
+          recoveryResumeRequired: false,
+        });
         this.#transitionMission(record.envelopeId, 'UNVERIFIED', {
           error: 'result_recovery_surface_unavailable',
         });
@@ -2179,6 +2286,12 @@ export class PaneAgentRuntime {
 
 
       if (result?.terminalSignal === 'conversation_changed') {
+        this.#storeMission({
+          ...this.state.missions[record.envelopeId],
+          reconciliationRequired: true,
+          reconciliationReason: 'result_recovery_conversation_changed',
+          recoveryResumeRequired: false,
+        });
         this.#transitionMission(record.envelopeId, 'UNVERIFIED', {
           error: 'result_recovery_conversation_changed',
           expectedConversationId: result.expectedConversationId ?? null,
@@ -2205,6 +2318,12 @@ export class PaneAgentRuntime {
       }
 
       if (result?.terminalSignal === 'result_timeout') {
+        this.#storeMission({
+          ...this.state.missions[record.envelopeId],
+          reconciliationRequired: true,
+          reconciliationReason: 'result_recovery_timeout',
+          recoveryResumeRequired: false,
+        });
         this.#transitionMission(record.envelopeId, 'UNVERIFIED', {
           error: 'result_recovery_timeout',
           terminalSignal: 'result_timeout',
@@ -2228,6 +2347,12 @@ export class PaneAgentRuntime {
       }
 
       if (result?.interrupted || result?.terminalSignal === 'assistant_interrupted') {
+        this.#storeMission({
+          ...this.state.missions[record.envelopeId],
+          reconciliationRequired: true,
+          reconciliationReason: 'assistant_interrupted_during_recovery',
+          recoveryResumeRequired: false,
+        });
         this.#transitionMission(record.envelopeId, 'UNVERIFIED', {
           error: 'assistant_interrupted_during_recovery',
           terminalSignal: result?.terminalSignal ?? 'assistant_interrupted',
@@ -2261,6 +2386,12 @@ export class PaneAgentRuntime {
           capturedAt: this.now(),
         });
       } catch (error) {
+        this.#storeMission({
+          ...this.state.missions[record.envelopeId],
+          reconciliationRequired: true,
+          reconciliationReason: error.message,
+          recoveryResumeRequired: false,
+        });
         this.#transitionMission(record.envelopeId, 'UNVERIFIED', {
           error: error.message,
           terminalSignal: result?.terminalSignal ?? null,
@@ -2288,6 +2419,11 @@ export class PaneAgentRuntime {
         acceptedAssistantStartMessageId: capture.acceptedAssistantStartMessageId,
         acceptedAssistantMessageId: capture.acceptedAssistantMessageId,
         assistantMessageIdMigratedFrom: capture.assistantIdMigratedFrom ?? null,
+        reconciliationRequired: false,
+        reconciliationReason: null,
+        recoveryResumeRequired: false,
+        reconciliationOutcome: 'restart_late_result_validated',
+        reconciledAt: this.now(),
         result: capture,
       };
       this.#storeMission(transitionMissionState(withResult, 'RESULT_CAPTURED', {
@@ -2324,6 +2460,12 @@ export class PaneAgentRuntime {
         && persisted?.envelopeId === record.envelopeId;
 
       if (!valid) {
+        this.#storeMission({
+          ...this.state.missions[record.envelopeId],
+          reconciliationRequired: true,
+          reconciliationReason: 'restart_result_readback_integrity_failed',
+          recoveryResumeRequired: false,
+        });
         this.#transitionMission(record.envelopeId, 'UNVERIFIED', {
           error: 'restart_result_readback_integrity_failed',
         });
