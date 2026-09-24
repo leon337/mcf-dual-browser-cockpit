@@ -646,3 +646,103 @@ test('mission endpoint returns 503 while agent runtime startup recovery is incom
   assert.equal(body.ok, false);
   assert.equal(body.error, 'agent_runtime_initializing');
 });
+
+
+test('recovery checkpoint gates messages and exposes reconcile/cancel lifecycle controls', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-recovery-api-'));
+  const calls = [];
+  const wc = {
+    isDestroyed: () => false,
+    getURL: () => 'https://chatgpt.test/c/recovery',
+    getTitle: () => 'recovery',
+    isLoading: () => false,
+    navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    executeJavaScript: async () => ({ ok: true }),
+  };
+  const checkpointFor = async ({ pane = null } = {}) => {
+    calls.push(['checkpoint', pane]);
+    const blocked = pane === 'chat';
+    return {
+      ok: true,
+      pane,
+      recoveryRequired: blocked,
+      mutationAllowed: !blocked,
+      blockers: blocked ? [{ envelopeId: 'env-recovery', pane: 'chat', state: 'UNVERIFIED' }] : [],
+    };
+  };
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    getPaneWebContents: () => wc,
+    captureDir: dir,
+    instanceId: 'test',
+    getAgentRecoveryCheckpoint: checkpointFor,
+    reconcileAgentMission: async input => {
+      calls.push(['reconcile', input]);
+      return { ok: true, envelopeId: input.envelopeId, reconciliationRequired: false, state: 'UNVERIFIED' };
+    },
+    cancelAgentMission: async input => {
+      calls.push(['cancel', input]);
+      return { ok: true, envelopeId: input.envelopeId, cancellationRequested: true, reconciliationRequired: true };
+    },
+  });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive: true }); });
+
+  const base = 'http://127.0.0.1:' + bridge.port;
+  const headers = {
+    Authorization: 'Bearer ' + bridge.token,
+    'Content-Type': 'application/json',
+  };
+
+  const checkpoint = await fetch(base + '/v1/recovery-checkpoint?pane=chat', { headers });
+  assert.equal(checkpoint.status, 200);
+  const checkpointBody = await checkpoint.json();
+  assert.equal(checkpointBody.recoveryRequired, true);
+  assert.equal(checkpointBody.mutationAllowed, false);
+
+  const invalid = await fetch(base + '/v1/recovery-checkpoint?pane=invalid', { headers });
+  assert.equal(invalid.status, 400);
+
+  const blockedMessage = await fetch(base + '/v1/message', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ pane: 'chat', message: 'não deve ser enviada' }),
+  });
+  assert.equal(blockedMessage.status, 409);
+  assert.equal((await blockedMessage.json()).error, 'recovery_required');
+
+  const blockedBroadcast = await fetch(base + '/v1/messages/broadcast', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ targets: ['chat', 'workspace'], message: 'não deve duplicar' }),
+  });
+  assert.equal(blockedBroadcast.status, 409);
+  assert.equal((await blockedBroadcast.json()).error, 'recovery_required');
+
+  const reconciled = await fetch(base + '/v1/mission-reconcile', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      envelopeId: 'env-recovery',
+      outcome: 'no_active_execution_confirmed',
+      authority: 'LEANDRO',
+    }),
+  });
+  assert.equal(reconciled.status, 200);
+  assert.equal((await reconciled.json()).ok, true);
+
+  const cancelled = await fetch(base + '/v1/mission-cancel', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      envelopeId: 'env-recovery',
+      authority: 'LEANDRO',
+      reason: 'explicit test cancel',
+    }),
+  });
+  assert.equal(cancelled.status, 200);
+  assert.equal((await cancelled.json()).cancellationRequested, true);
+
+  assert.ok(calls.some(call => call[0] === 'reconcile'));
+  assert.ok(calls.some(call => call[0] === 'cancel'));
+});

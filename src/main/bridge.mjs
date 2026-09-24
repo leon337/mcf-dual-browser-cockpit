@@ -126,6 +126,9 @@ export class LocalAgentBridge {
     listAgentMissions = null,
     getAgentMission = null,
     getParentAgentMissionStatus = null,
+    getAgentRecoveryCheckpoint = null,
+    reconcileAgentMission = null,
+    cancelAgentMission = null,
     onEvent = () => {},
   }) {
     this.getWorkspaceWebContents = getWorkspaceWebContents;
@@ -148,6 +151,9 @@ export class LocalAgentBridge {
     this.listAgentMissions = listAgentMissions;
     this.getAgentMission = getAgentMission;
     this.getParentAgentMissionStatus = getParentAgentMissionStatus;
+    this.getAgentRecoveryCheckpoint = getAgentRecoveryCheckpoint;
+    this.reconcileAgentMission = reconcileAgentMission;
+    this.cancelAgentMission = cancelAgentMission;
     this.onEvent = onEvent;
     this.server = null;
     this.port = null;
@@ -839,12 +845,68 @@ export class LocalAgentBridge {
         return json(res, 200, { ok: true, status });
       }
 
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/recovery-checkpoint') {
+        if (typeof this.getAgentRecoveryCheckpoint !== 'function') {
+          return json(res, 503, { ok: false, error: 'agent_lifecycle_runtime_unavailable' });
+        }
+        const rawPane = requestUrl.searchParams.get('pane');
+        const pane = rawPane == null || rawPane === '' ? null : normalizePaneTarget(rawPane);
+        if (rawPane && !pane) {
+          return json(res, 400, { ok: false, error: 'valid_pane_required' });
+        }
+        const checkpoint = await this.getAgentRecoveryCheckpoint({ pane });
+        return json(res, checkpoint?.ok === false ? 422 : 200, checkpoint);
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/mission-reconcile') {
+        if (typeof this.reconcileAgentMission !== 'function') {
+          return json(res, 503, { ok: false, error: 'agent_lifecycle_runtime_unavailable' });
+        }
+        const body = await readJson(req);
+        const result = await this.reconcileAgentMission(body ?? {});
+        const status = result?.ok
+          ? 200
+          : result?.error === 'mission_not_found'
+            ? 404
+            : result?.error === 'mission_not_reconciliation_blocked'
+              ? 409
+              : 422;
+        return json(res, status, result ?? { ok: false, error: 'mission_reconcile_failed' });
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/mission-cancel') {
+        if (typeof this.cancelAgentMission !== 'function') {
+          return json(res, 503, { ok: false, error: 'agent_lifecycle_runtime_unavailable' });
+        }
+        const body = await readJson(req);
+        const result = await this.cancelAgentMission(body ?? {});
+        const status = result?.ok
+          ? 200
+          : result?.error === 'mission_not_found'
+            ? 404
+            : result?.error === 'mission_already_completed'
+              ? 409
+              : 422;
+        return json(res, status, result ?? { ok: false, error: 'mission_cancel_failed' });
+      }
+
       if (req.method === 'POST' && requestUrl.pathname === '/v1/message') {
         const body = await readJson(req);
         const pane = normalizePaneTarget(body?.pane);
         const message = messageInput(body);
         if (!pane) return json(res, 400, { ok: false, error: 'valid_message_target_required' });
         if (!message) return json(res, 400, { ok: false, error: 'valid_message_required' });
+        if (typeof this.getAgentRecoveryCheckpoint === 'function') {
+          const checkpoint = await this.getAgentRecoveryCheckpoint({ pane });
+          if (checkpoint?.recoveryRequired || checkpoint?.mutationAllowed === false) {
+            return json(res, 409, {
+              ok: false,
+              error: 'recovery_required',
+              pane,
+              checkpoint,
+            });
+          }
+        }
         const result = await this.#sendMessage(pane, message);
         const status = result.ok ? 200 : result.error === 'rate_limit_hard_block' ? 429 : 422;
         return json(res, status, result);
@@ -858,6 +920,23 @@ export class LocalAgentBridge {
         if (!message) return json(res, 400, { ok: false, error: 'valid_message_required' });
         if (!targets.length || targets.length !== rawTargets.length) {
           return json(res, 400, { ok: false, error: 'valid_message_targets_required' });
+        }
+        if (typeof this.getAgentRecoveryCheckpoint === 'function') {
+          const blockers = [];
+          for (const targetPane of targets) {
+            const checkpoint = await this.getAgentRecoveryCheckpoint({ pane: targetPane });
+            if (checkpoint?.recoveryRequired || checkpoint?.mutationAllowed === false) {
+              blockers.push({ pane: targetPane, checkpoint });
+            }
+          }
+          if (blockers.length) {
+            return json(res, 409, {
+              ok: false,
+              error: 'recovery_required',
+              targets,
+              blockers,
+            });
+          }
         }
         const results = await Promise.all(targets.map(target => this.#sendMessage(target, message)));
         const ok = results.every(result => result.ok);

@@ -21,6 +21,7 @@ export const PANE_AGENT_RUNTIME_SCHEMA = 'mcf-pane-agent-runtime/v1';
 const PANES = Object.freeze(['chat', 'workspace']);
 const RECEIPT_LIMIT = 500;
 const LIVE_RESULT_TEXT_LIMIT = 64000;
+const DEFAULT_START_TIMEOUT_RECOVERY_MS = 6 * 60 * 1000;
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -74,6 +75,13 @@ function missionLiveView(record) {
     revision: record.revision ?? null,
     attemptNumber: record.attemptNumber ?? 1,
     retryOfEnvelopeId: record.retryOfEnvelopeId ?? null,
+    reconciliationRequired: record.reconciliationRequired === true,
+    reconciliationReason: record.reconciliationReason ?? null,
+    reconciledAt: record.reconciledAt ?? null,
+    cancellationRequested: record.cancellationRequested === true,
+    cancellationRequestedAt: record.cancellationRequestedAt ?? null,
+    cancellationRequestedBy: record.cancellationRequestedBy ?? null,
+    cancellationOutcome: record.cancellationOutcome ?? null,
     createdAt: record.createdAt ?? null,
     updatedAt: record.updatedAt ?? null,
     lastError: record.lastError ?? null,
@@ -108,6 +116,7 @@ export class PaneAgentRuntime {
     now = () => new Date().toISOString(),
     startupReady = true,
     onEvent = () => {},
+    startTimeoutRecoveryMs = DEFAULT_START_TIMEOUT_RECOVERY_MS,
   }) {
     if (!instanceId || !missionId || !broker || !surface) {
       throw new Error('invalid_agent_runtime_configuration');
@@ -123,6 +132,7 @@ export class PaneAgentRuntime {
     this.now = now;
     this.startupReady = Boolean(startupReady);
     this.onEvent = typeof onEvent === 'function' ? onEvent : () => {};
+    this.startTimeoutRecoveryMs = Math.max(0, Number(startTimeoutRecoveryMs) || 0);
     this.missionTasks = new Map();
     this.paneMissionQueues = new Map();
     const loaded = loadState();
@@ -239,6 +249,265 @@ export class PaneAgentRuntime {
     return clone(this.state.missions?.[envelopeId] ?? null);
   }
 
+  async requestMissionCancellation({
+    envelopeId,
+    authority = 'LEANDRO',
+    reason = null,
+  } = {}) {
+    const id = String(envelopeId || '').trim();
+    const normalizedAuthority = String(authority || '').trim();
+    if (!id) return { ok: false, error: 'envelope_id_required' };
+    if (!['LEANDRO', 'MESTRE'].includes(normalizedAuthority)) {
+      return { ok: false, error: 'valid_cancellation_authority_required' };
+    }
+    const record = this.state.missions?.[id];
+    if (!record) return { ok: false, error: 'mission_not_found', envelopeId: id };
+    if (record.state === 'COMPLETED') {
+      return { ok: false, error: 'mission_already_completed', envelopeId: id, state: record.state };
+    }
+    if (record.state === 'CANCELLED_BY_AUTHORITY') {
+      return {
+        ok: true,
+        deduplicated: true,
+        envelopeId: id,
+        state: record.state,
+        cancellationRequested: true,
+        cancellationOutcome: record.cancellationOutcome ?? 'cancelled_no_effect_confirmed',
+      };
+    }
+    if (['FAILED', 'REJECTED'].includes(record.state)) {
+      return { ok: false, error: 'mission_not_cancellable', envelopeId: id, state: record.state };
+    }
+    if (record.cancellationRequested === true) {
+      return {
+        ok: true,
+        deduplicated: true,
+        envelopeId: id,
+        state: record.state,
+        cancellationRequested: true,
+        reconciliationRequired: record.reconciliationRequired === true,
+        cancellationSignal: clone(record.cancellationSignal ?? null),
+      };
+    }
+
+    const requestedAt = this.now();
+    const updated = this.#storeMission({
+      ...record,
+      cancellationRequested: true,
+      cancellationRequestedAt: requestedAt,
+      cancellationRequestedBy: normalizedAuthority,
+      cancellationReason: reason == null ? null : String(reason),
+      cancellationOutcome: 'cancel_requested',
+      reconciliationRequired: true,
+      reconciliationReason: 'explicit_cancel_pending_reconciliation',
+    });
+    const context = this.#missionContext(updated);
+    this.#record(createAgentReceipt({
+      kind: 'MISSION_CANCEL_REQUESTED',
+      status: updated.state,
+      binding: context.binding,
+      session: context.session,
+      envelope: context.envelope,
+      evidence: {
+        pane: updated.pane,
+        executionId: updated.executionId,
+        authority: normalizedAuthority,
+        reason: reason == null ? null : String(reason),
+        requestedAt,
+        expectedConversationUrl: updated.delivery?.url ?? null,
+      },
+      now: requestedAt,
+    }));
+
+    let cancellationSignal = {
+      ok: false,
+      requested: false,
+      error: 'cancel_generation_surface_unavailable',
+    };
+    if (typeof this.surface.cancelAssistantGeneration === 'function') {
+      cancellationSignal = await this.surface.cancelAssistantGeneration(updated.pane, {
+        expectedConversationUrl: updated.delivery?.url ?? null,
+        envelopeId: updated.envelopeId,
+        executionId: updated.executionId,
+      });
+    }
+
+    this.#storeMission({
+      ...this.state.missions[id],
+      cancellationSignal: clone(cancellationSignal),
+      cancellationSignalObservedAt: this.now(),
+    });
+    this.#record(createAgentReceipt({
+      kind: cancellationSignal?.ok
+        ? 'MISSION_CANCEL_SIGNAL_SENT'
+        : 'MISSION_CANCEL_SIGNAL_UNCONFIRMED',
+      status: this.state.missions[id].state,
+      binding: context.binding,
+      session: context.session,
+      envelope: context.envelope,
+      evidence: {
+        pane: updated.pane,
+        executionId: updated.executionId,
+        cancellationSignal: clone(cancellationSignal),
+        reconciliationRequired: true,
+      },
+      now: this.now(),
+    }));
+
+    return {
+      ok: true,
+      envelopeId: id,
+      state: this.state.missions[id].state,
+      cancellationRequested: true,
+      cancellationState: cancellationSignal?.ok
+        ? 'CANCEL_REQUESTED'
+        : 'CANCEL_REQUEST_UNCONFIRMED',
+      cancellationSignal: clone(cancellationSignal),
+      reconciliationRequired: true,
+    };
+  }
+
+  reconcileMission({
+    envelopeId,
+    outcome,
+    authority = 'LEANDRO',
+    evidence = null,
+  } = {}) {
+    const id = String(envelopeId || '').trim();
+    const normalizedOutcome = String(outcome || '').trim();
+    const normalizedAuthority = String(authority || '').trim();
+    if (!id) return { ok: false, error: 'envelope_id_required' };
+    if (!['no_active_execution_confirmed', 'cancelled_no_effect_confirmed'].includes(normalizedOutcome)) {
+      return { ok: false, error: 'valid_reconciliation_outcome_required' };
+    }
+    if (!['LEANDRO', 'MESTRE'].includes(normalizedAuthority)) {
+      return { ok: false, error: 'valid_reconciliation_authority_required' };
+    }
+    const record = this.state.missions?.[id];
+    if (!record) return { ok: false, error: 'mission_not_found', envelopeId: id };
+    if (!['UNVERIFIED', 'INTERRUPTED'].includes(record.state)
+        || record.reconciliationRequired !== true) {
+      return {
+        ok: false,
+        error: 'mission_not_reconciliation_blocked',
+        envelopeId: id,
+        state: record.state,
+        reconciliationRequired: record.reconciliationRequired === true,
+      };
+    }
+
+    const reconciledAt = this.now();
+    let updated = this.#storeMission({
+      ...record,
+      reconciliationRequired: false,
+      reconciliationReason: null,
+      reconciliationOutcome: normalizedOutcome,
+      reconciledAt,
+      reconciledBy: normalizedAuthority,
+      reconciliationEvidence: evidence == null ? null : clone(evidence),
+      cancellationOutcome: normalizedOutcome === 'cancelled_no_effect_confirmed'
+        ? 'cancelled_no_effect_confirmed'
+        : record.cancellationOutcome ?? null,
+    });
+    const context = this.#missionContext(updated);
+    const receipt = this.#record(createAgentReceipt({
+      kind: 'MISSION_RECONCILED',
+      status: updated.state,
+      binding: context.binding,
+      session: context.session,
+      envelope: context.envelope,
+      evidence: {
+        pane: updated.pane,
+        executionId: updated.executionId,
+        outcome: normalizedOutcome,
+        authority: normalizedAuthority,
+        reconciledAt,
+        evidence: evidence == null ? null : clone(evidence),
+      },
+      now: reconciledAt,
+    }));
+
+    if (normalizedOutcome === 'cancelled_no_effect_confirmed') {
+      updated = this.#transitionMission(id, 'CANCELLED_BY_AUTHORITY', {
+        authority: normalizedAuthority,
+        outcome: normalizedOutcome,
+        reconciledAt,
+      });
+      this.#record(createAgentReceipt({
+        kind: 'MISSION_CANCELLED_BY_AUTHORITY',
+        status: 'CANCELLED_BY_AUTHORITY',
+        binding: context.binding,
+        session: context.session,
+        envelope: context.envelope,
+        evidence: {
+          pane: updated.pane,
+          executionId: updated.executionId,
+          authority: normalizedAuthority,
+          outcome: normalizedOutcome,
+          reconciledAt,
+        },
+        now: reconciledAt,
+      }));
+    }
+
+    return {
+      ok: true,
+      envelopeId: id,
+      state: updated.state,
+      reconciliationRequired: false,
+      outcome: normalizedOutcome,
+      reconciledAt,
+      receipt: clone(receipt),
+    };
+  }
+
+  getRecoveryCheckpoint({ pane = null } = {}) {
+    const normalizedPane = pane == null ? null : String(pane).trim();
+    if (normalizedPane && !PANES.includes(normalizedPane)) {
+      return { ok: false, error: 'valid_pane_required' };
+    }
+    const activeStates = new Set([
+      'QUEUED',
+      'DELIVERED',
+      'ACCEPTED',
+      'WORKING',
+      'RESULT_CAPTURED',
+      'RECOVERING',
+    ]);
+    const blockers = Object.values(this.state.missions ?? {})
+      .filter(record => !normalizedPane || record?.pane === normalizedPane)
+      .filter(record =>
+        activeStates.has(record?.state)
+        || record?.reconciliationRequired === true
+        || (
+          record?.cancellationRequested === true
+          && !['COMPLETED', 'CANCELLED_BY_AUTHORITY', 'FAILED', 'REJECTED'].includes(record?.state)
+        )
+      )
+      .map(record => ({
+        envelopeId: record.envelopeId,
+        missionId: record.missionId,
+        parentMissionId: record.parentMissionId ?? null,
+        agentId: record.agentId,
+        pane: record.pane,
+        state: record.state,
+        attemptNumber: record.attemptNumber ?? 1,
+        reconciliationRequired: record.reconciliationRequired === true,
+        reconciliationReason: record.reconciliationReason ?? null,
+        cancellationRequested: record.cancellationRequested === true,
+        updatedAt: record.updatedAt ?? null,
+      }));
+
+    return {
+      ok: true,
+      pane: normalizedPane,
+      recoveryRequired: blockers.length > 0,
+      mutationAllowed: blockers.length === 0,
+      blockers,
+      capturedAt: this.now(),
+    };
+  }
+
   getParentMissionStatus(parentMissionId) {
     return parentMissionStatus(parentMissionId, this.listMissions());
   }
@@ -282,6 +551,265 @@ export class PaneAgentRuntime {
       assistantMessageId: record.acceptedAssistantMessageId ?? null,
       userMessageId: record.delivery?.userMessageId ?? null,
     };
+  }
+
+  async #recoverLateResultAfterStartTimeout({
+    envelopeId,
+    pane,
+    marker,
+    binding,
+    session,
+    envelope,
+    executionId,
+    userMessageId,
+    baselineAssistantMessageId,
+    acceptance,
+  }) {
+    const recoveryReason = 'assistant_start_observation_timeout';
+    this.#storeMission({
+      ...this.state.missions[envelopeId],
+      reconciliationRequired: true,
+      reconciliationReason: recoveryReason,
+      reconciliationStartedAt: this.now(),
+    });
+    this.#transitionMission(envelopeId, 'RECOVERING', {
+      marker,
+      baselineAssistantMessageId,
+      userMessageId,
+      error: acceptance?.error ?? 'assistant_start_timeout',
+      generationActive: acceptance?.generationActive ?? null,
+      reason: recoveryReason,
+    });
+    this.#record(createAgentReceipt({
+      kind: 'MISSION_RECOVERING',
+      status: 'RECOVERING',
+      binding,
+      session,
+      envelope,
+      evidence: {
+        pane,
+        executionId,
+        marker,
+        userMessageId,
+        baselineAssistantMessageId,
+        observation: recoveryReason,
+        generationActive: acceptance?.generationActive ?? null,
+        url: acceptance?.url ?? this.surface.getUrl(pane) ?? null,
+      },
+      now: this.now(),
+    }));
+
+    if (typeof this.surface.waitForAssistantResult !== 'function') {
+      this.#transitionMission(envelopeId, 'UNVERIFIED', {
+        error: 'late_result_recovery_surface_unavailable',
+        reason: recoveryReason,
+      });
+      return this.#record(createAgentReceipt({
+        kind: 'MISSION_RESULT_UNVERIFIED',
+        status: 'UNVERIFIED',
+        binding,
+        session,
+        envelope,
+        evidence: {
+          pane,
+          executionId,
+          error: 'late_result_recovery_surface_unavailable',
+          reconciliationRequired: true,
+          reason: recoveryReason,
+        },
+        now: this.now(),
+      }));
+    }
+
+    const lateResult = await this.surface.waitForAssistantResult(pane, {
+      marker,
+      assistantMessageId: null,
+      userMessageId,
+      baselineAssistantMessageId,
+      expectedConversationUrl: this.state.missions[envelopeId]?.delivery?.url ?? null,
+      envelope,
+      executionId,
+      session,
+      recovery: true,
+      startTimeoutRecovery: true,
+    }, this.startTimeoutRecoveryMs);
+
+    if (['result_timeout', 'conversation_changed', 'conversation_anchor_lost'].includes(
+      lateResult?.terminalSignal
+    ) || lateResult?.interrupted || lateResult?.terminalSignal === 'assistant_interrupted') {
+      const lateError = lateResult?.terminalSignal === 'result_timeout'
+        ? 'late_result_recovery_timeout'
+        : lateResult?.terminalSignal === 'conversation_changed'
+          ? 'late_result_recovery_conversation_changed'
+          : lateResult?.terminalSignal === 'conversation_anchor_lost'
+            ? 'late_result_recovery_anchor_lost'
+            : 'late_result_recovery_interrupted';
+      this.#transitionMission(envelopeId, 'UNVERIFIED', {
+        error: lateError,
+        reason: recoveryReason,
+        terminalSignal: lateResult?.terminalSignal ?? null,
+        expectedConversationId: lateResult?.expectedConversationId ?? null,
+        currentConversationId: lateResult?.currentConversationId ?? null,
+      });
+      return this.#record(createAgentReceipt({
+        kind: 'MISSION_RESULT_UNVERIFIED',
+        status: 'UNVERIFIED',
+        binding,
+        session,
+        envelope,
+        evidence: {
+          pane,
+          executionId,
+          error: lateError,
+          reconciliationRequired: true,
+          reason: recoveryReason,
+          terminalSignal: lateResult?.terminalSignal ?? null,
+          generationActive: lateResult?.generationActive ?? null,
+          expectedConversationId: lateResult?.expectedConversationId ?? null,
+          currentConversationId: lateResult?.currentConversationId ?? null,
+          linkedUserMessageId: lateResult?.linkedUserMessageId ?? userMessageId ?? null,
+          url: lateResult?.url ?? this.surface.getUrl(pane) ?? null,
+        },
+        now: this.now(),
+      }));
+    }
+
+    let capture;
+    try {
+      capture = createResultCapture({
+        record: this.state.missions[envelopeId],
+        result: lateResult,
+        marker,
+        capturedAt: this.now(),
+      });
+    } catch (error) {
+      this.#transitionMission(envelopeId, 'UNVERIFIED', {
+        error: error.message,
+        reason: recoveryReason,
+        terminalSignal: lateResult?.terminalSignal ?? null,
+      });
+      return this.#record(createAgentReceipt({
+        kind: 'MISSION_RESULT_UNVERIFIED',
+        status: 'UNVERIFIED',
+        binding,
+        session,
+        envelope,
+        evidence: {
+          pane,
+          executionId,
+          error: error.message,
+          reconciliationRequired: true,
+          reason: recoveryReason,
+          terminalSignal: lateResult?.terminalSignal ?? null,
+          linkedUserMessageId: lateResult?.linkedUserMessageId ?? userMessageId ?? null,
+          url: lateResult?.url ?? this.surface.getUrl(pane) ?? null,
+        },
+        now: this.now(),
+      }));
+    }
+
+    const recovered = {
+      ...this.state.missions[envelopeId],
+      acceptedAssistantStartMessageId: capture.acceptedAssistantStartMessageId,
+      acceptedAssistantMessageId: capture.acceptedAssistantMessageId,
+      acceptanceMarkerObserved: capture.acceptanceMarkerObserved,
+      reconciliationRequired: false,
+      reconciliationReason: null,
+      reconciliationOutcome: 'late_result_validated',
+      reconciledAt: this.now(),
+      result: capture,
+    };
+    this.#storeMission(transitionMissionState(recovered, 'RESULT_CAPTURED', {
+      at: this.now(),
+      evidence: {
+        recoveredLateResult: true,
+        assistantMessageId: capture.assistantMessageId,
+        conversationId: capture.conversationId,
+        linkedUserMessageId: capture.linkedUserMessageId ?? userMessageId ?? null,
+        resultSha256: capture.resultSha256,
+        terminalSignal: capture.terminalProof.terminalSignal,
+      },
+    }));
+    this.#record(createAgentReceipt({
+      kind: 'MISSION_LATE_RESULT_RECOVERED',
+      status: 'RESULT_CAPTURED',
+      binding,
+      session,
+      envelope,
+      evidence: {
+        pane,
+        executionId,
+        assistantMessageId: capture.assistantMessageId,
+        conversationId: capture.conversationId,
+        linkedUserMessageId: capture.linkedUserMessageId ?? userMessageId ?? null,
+        resultSha256: capture.resultSha256,
+        terminalSignal: capture.terminalProof.terminalSignal,
+        acceptanceMarkerObserved: capture.acceptanceMarkerObserved,
+        url: capture.url ?? this.surface.getUrl(pane) ?? null,
+      },
+      now: this.now(),
+    }));
+
+    const reloaded = this.loadState();
+    const persisted = reloaded?.missions?.[envelopeId]?.result ?? null;
+    const readBackValid = verifyResultCapture(persisted)
+      && persisted?.resultSha256 === capture.resultSha256
+      && persisted?.assistantMessageId === capture.assistantMessageId
+      && persisted?.conversationId === capture.conversationId
+      && persisted?.executionId === executionId
+      && persisted?.envelopeId === envelopeId;
+
+    if (!readBackValid) {
+      this.#transitionMission(envelopeId, 'UNVERIFIED', {
+        error: 'late_result_readback_integrity_failed',
+      });
+      this.#storeMission({
+        ...this.state.missions[envelopeId],
+        reconciliationRequired: true,
+        reconciliationReason: 'late_result_readback_integrity_failed',
+      });
+      return this.#record(createAgentReceipt({
+        kind: 'MISSION_RESULT_UNVERIFIED',
+        status: 'UNVERIFIED',
+        binding,
+        session,
+        envelope,
+        evidence: {
+          pane,
+          executionId,
+          error: 'late_result_readback_integrity_failed',
+          reconciliationRequired: true,
+          resultSha256: capture.resultSha256,
+        },
+        now: this.now(),
+      }));
+    }
+
+    this.#transitionMission(envelopeId, 'COMPLETED', {
+      recoveredLateResult: true,
+      assistantMessageId: capture.assistantMessageId,
+      conversationId: capture.conversationId,
+      resultSha256: capture.resultSha256,
+    });
+    return this.#record(createAgentReceipt({
+      kind: 'MISSION_COMPLETED',
+      status: 'COMPLETED',
+      binding,
+      session,
+      envelope,
+      evidence: {
+        pane,
+        executionId,
+        recoveredLateResult: true,
+        assistantMessageId: capture.assistantMessageId,
+        conversationId: capture.conversationId,
+        linkedUserMessageId: capture.linkedUserMessageId ?? userMessageId ?? null,
+        resultSha256: capture.resultSha256,
+        terminalSignal: capture.terminalProof.terminalSignal,
+        url: capture.url ?? this.surface.getUrl(pane) ?? null,
+      },
+      now: this.now(),
+    }));
   }
 
   getIdentities() {
@@ -575,6 +1103,21 @@ export class PaneAgentRuntime {
         ) ?? null;
         const retryRequested = input?.retryFailed === true;
 
+        if (retryRequested && existing.reconciliationRequired === true) {
+          return {
+            ok: false,
+            error: 'mission_reconciliation_required',
+            agentId: manifest.agentId,
+            pane,
+            missionId: requestedMissionId,
+            parentMissionId: requestedParentMissionId,
+            envelopeId: existing.envelopeId,
+            state: existing.state,
+            reconciliationRequired: true,
+            reconciliationReason: existing.reconciliationReason ?? null,
+          };
+        }
+
         if (retryRequested
             && !completedAttempt
             && !activeAttempt
@@ -612,6 +1155,39 @@ export class PaneAgentRuntime {
           };
         }
       }
+    }
+
+    const blockingStates = new Set([
+      'QUEUED',
+      'DELIVERED',
+      'ACCEPTED',
+      'WORKING',
+      'RESULT_CAPTURED',
+      'RECOVERING',
+    ]);
+    const paneBlocker = Object.values(this.state.missions ?? {}).find(record =>
+      record?.pane === pane
+      && (
+        blockingStates.has(record?.state)
+        || record?.reconciliationRequired === true
+        || record?.cancellationRequested === true
+      )
+    ) ?? null;
+    if (paneBlocker) {
+      return {
+        ok: false,
+        error: paneBlocker.reconciliationRequired === true
+          ? 'pane_recovery_required'
+          : 'pane_mission_active',
+        agentId: manifest.agentId,
+        pane,
+        envelopeId: paneBlocker.envelopeId,
+        missionId: paneBlocker.missionId,
+        state: paneBlocker.state,
+        reconciliationRequired: paneBlocker.reconciliationRequired === true,
+        reconciliationReason: paneBlocker.reconciliationReason ?? null,
+        cancellationRequested: paneBlocker.cancellationRequested === true,
+      };
     }
 
     const current = this.state.bindings[pane];
@@ -653,6 +1229,13 @@ export class PaneAgentRuntime {
       envelope,
       attemptNumber: retryContext?.attemptNumber ?? 1,
       retryOfEnvelopeId: retryContext?.retryOfEnvelopeId ?? null,
+      reconciliationRequired: false,
+      reconciliationReason: null,
+      reconciledAt: null,
+      cancellationRequested: false,
+      cancellationRequestedAt: null,
+      cancellationRequestedBy: null,
+      cancellationOutcome: null,
       acceptanceMarker: 'MCF_MISSION_ACCEPTED envelope_id=' + envelope.envelopeId
         + ' agent_id=' + manifest.agentId,
       state: 'QUEUED',
@@ -687,6 +1270,29 @@ export class PaneAgentRuntime {
     const missionTask = previous
       .catch(() => null)
       .then(async () => {
+        const preDelivery = this.state.missions[envelope.envelopeId];
+        if (preDelivery?.cancellationRequested === true) {
+          this.#transitionMission(envelope.envelopeId, 'CANCELLED_BY_AUTHORITY', {
+            reason: 'cancelled_before_delivery',
+            authority: preDelivery.cancellationRequestedBy ?? 'LEANDRO',
+          });
+          return this.#record(createAgentReceipt({
+            kind: 'MISSION_CANCELLED_BY_AUTHORITY',
+            status: 'CANCELLED_BY_AUTHORITY',
+            binding,
+            session,
+            envelope,
+            evidence: {
+              pane,
+              executionId,
+              reason: 'cancelled_before_delivery',
+              authority: preDelivery.cancellationRequestedBy ?? 'LEANDRO',
+              deliveryOccurred: false,
+            },
+            now: this.now(),
+          }));
+        }
+
         const delivery = await this.surface.sendMessage(pane, formatMissionEnvelope(envelope));
         if (!delivery?.ok) {
           this.#transitionMission(envelope.envelopeId, 'FAILED', {
@@ -756,12 +1362,15 @@ export class PaneAgentRuntime {
               baselineAssistantMessageId,
             });
 
-            const stillWaitingForAssistantIdentity = !acceptance?.accepted
+            const positiveActivityTimeout = !acceptance?.accepted
               && !acceptance?.interrupted
               && acceptance?.error === 'assistant_start_timeout'
-              && acceptance?.generationActive === true;
-
-            if (!stillWaitingForAssistantIdentity) break;
+              && (
+                acceptance?.generationActive === true
+                || acceptance?.activityObserved === true
+                || acceptance?.positiveActivityObserved === true
+              );
+            if (!positiveActivityTimeout) break;
 
             this.#record(createAgentReceipt({
               kind: 'MISSION_ACCEPTANCE_STILL_WAITING',
@@ -775,8 +1384,11 @@ export class PaneAgentRuntime {
                 marker,
                 userMessageId,
                 baselineAssistantMessageId,
-                observation: 'assistant_start_timeout_generation_active_non_terminal',
-                generationActive: true,
+                observation: 'assistant_start_timeout_positive_activity_non_terminal',
+                generationActive: Boolean(acceptance?.generationActive),
+                activityObserved: Boolean(acceptance?.activityObserved),
+                positiveActivityObserved: Boolean(acceptance?.positiveActivityObserved),
+                lastActivityAt: acceptance?.lastActivityAt ?? null,
                 url: acceptance?.url ?? this.surface.getUrl(pane) ?? null,
               },
               now: this.now(),
@@ -821,6 +1433,21 @@ export class PaneAgentRuntime {
             },
             now: this.now(),
           }));
+        }
+
+        if (!acceptance?.accepted && acceptance?.error === 'assistant_start_timeout') {
+          return this.#recoverLateResultAfterStartTimeout({
+            envelopeId: envelope.envelopeId,
+            pane,
+            marker,
+            binding,
+            session,
+            envelope,
+            executionId,
+            userMessageId,
+            baselineAssistantMessageId,
+            acceptance,
+          });
         }
 
         if (!acceptance?.accepted) {
@@ -969,6 +1596,11 @@ export class PaneAgentRuntime {
           const observationError = result.terminalSignal === 'conversation_changed'
             ? 'conversation_changed_during_result_observation'
             : 'conversation_anchor_lost_during_result_observation';
+          this.#storeMission({
+            ...this.state.missions[envelope.envelopeId],
+            reconciliationRequired: true,
+            reconciliationReason: observationError,
+          });
           this.#transitionMission(envelope.envelopeId, 'UNVERIFIED', {
             error: observationError,
             expectedConversationId: result.expectedConversationId ?? null,
@@ -991,6 +1623,7 @@ export class PaneAgentRuntime {
               currentConversationId: result.currentConversationId ?? null,
               assistantMessageId: result.assistantMessageId ?? acceptedAssistantMessageId,
               linkedUserMessageId: result.linkedUserMessageId ?? userMessageId,
+              reconciliationRequired: true,
               url: result.url ?? this.surface.getUrl(pane) ?? null,
             },
             now: this.now(),
@@ -1075,10 +1708,22 @@ export class PaneAgentRuntime {
           }));
         }
 
+        const currentBeforeResultStore = this.state.missions[envelope.envelopeId];
         const withResult = {
-          ...this.state.missions[envelope.envelopeId],
+          ...currentBeforeResultStore,
           acceptedAssistantStartMessageId: capture.acceptedAssistantStartMessageId,
           acceptedAssistantMessageId: capture.acceptedAssistantMessageId,
+          reconciliationRequired: false,
+          reconciliationReason: null,
+          reconciliationOutcome: currentBeforeResultStore?.cancellationRequested
+            ? 'result_completed_after_cancel_request'
+            : currentBeforeResultStore?.reconciliationOutcome ?? null,
+          reconciledAt: currentBeforeResultStore?.cancellationRequested
+            ? this.now()
+            : currentBeforeResultStore?.reconciledAt ?? null,
+          cancellationOutcome: currentBeforeResultStore?.cancellationRequested
+            ? 'too_late_result_completed'
+            : currentBeforeResultStore?.cancellationOutcome ?? null,
           result: capture,
         };
         this.#storeMission(transitionMissionState(withResult, 'RESULT_CAPTURED', {
