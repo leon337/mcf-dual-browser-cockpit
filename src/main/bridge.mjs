@@ -140,6 +140,7 @@ export class LocalAgentBridge {
     this.agentProfile = agentProfile;
     this.paused = false;
     this.busy = false;
+    this.mutationQueue = [];
     this.uploadDir = uploadDir;
     this.captureWorkspace = captureWorkspace;
     this.openAgentSession = openAgentSession;
@@ -171,6 +172,7 @@ export class LocalAgentBridge {
       agentProfile: this.agentProfile,
       paused: this.paused,
       busy: this.busy,
+      queueDepth: this.mutationQueue.length,
       host: '127.0.0.1',
       port: this.port,
       token: this.server ? this.token : null,
@@ -243,6 +245,35 @@ export class LocalAgentBridge {
 
   async toggle() {
     return this.server ? this.stop() : this.start();
+  }
+
+  #drainMutationQueue() {
+    if (this.busy) return;
+
+    while (this.mutationQueue.length > 0) {
+      const entry = this.mutationQueue.shift();
+      if (entry.req.destroyed || entry.req.aborted || entry.res.destroyed) {
+        entry.resolve(null);
+        continue;
+      }
+
+      this.busy = true;
+      let released = false;
+      entry.resolve(() => {
+        if (released) return;
+        released = true;
+        this.busy = false;
+        this.#drainMutationQueue();
+      });
+      return;
+    }
+  }
+
+  #acquireMutation(req, res) {
+    return new Promise((resolve) => {
+      this.mutationQueue.push({ req, res, resolve });
+      this.#drainMutationQueue();
+    });
   }
 
   #paneWebContents(target) {
@@ -647,7 +678,7 @@ export class LocalAgentBridge {
   }
 
   async #handle(req, res) {
-    let acquired = false;
+    let releaseMutation = null;
     try {
       if (req.headers.host !== `127.0.0.1:${this.port}` && req.headers.host !== `localhost:${this.port}`) {
         return json(res, 403, { ok: false, error: 'invalid_host' });
@@ -712,9 +743,14 @@ export class LocalAgentBridge {
 
       if (req.method === 'POST') {
         if (this.paused) return json(res, 423, { ok: false, error: 'automation_paused' });
-        if (this.busy) return json(res, 409, { ok: false, error: 'automation_busy' });
-        this.busy = true;
-        acquired = true;
+
+        const previousSocketTimeout = req.socket?.timeout ?? 30000;
+        if (req.socket && !req.socket.destroyed) req.socket.setTimeout(0);
+        releaseMutation = await this.#acquireMutation(req, res);
+        if (req.socket && !req.socket.destroyed) req.socket.setTimeout(previousSocketTimeout);
+
+        if (!releaseMutation) return;
+        if (this.paused) return json(res, 423, { ok: false, error: 'automation_paused' });
       }
 
       if (req.method === 'GET' && requestUrl.pathname === '/v1/agent-sessions') {
@@ -991,6 +1027,7 @@ export class LocalAgentBridge {
             pane,
             paused: this.paused,
             busy: this.busy,
+            queueDepth: this.mutationQueue.length,
             url: wc.getURL(),
             title: wc.getTitle(),
             loading: wc.isLoading(),
@@ -1254,7 +1291,7 @@ export class LocalAgentBridge {
       this.onEvent({ level: 'error', message: `Bridge: ${code}` });
       if (!res.destroyed) return json(res, code === 'invalid_json' ? 400 : 500, { ok: false, error: code });
     } finally {
-      if (acquired) this.busy = false;
+      releaseMutation?.();
     }
   }
 }
