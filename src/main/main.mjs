@@ -1120,6 +1120,44 @@ function conversationIdFromUrl(value) {
   }
 }
 
+async function recoverMissionDelivery(
+  pane,
+  {
+    envelopeId = null,
+    missionId = null,
+  } = {},
+) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) {
+    return { ok: false, error: 'pane_unavailable' };
+  }
+  const script = [
+    '(() => {',
+    'const envelopeId=' + JSON.stringify(envelopeId) + ';',
+    'const missionId=' + JSON.stringify(missionId) + ';',
+    'if (!envelopeId) return {ok:false,error:"envelope_id_required"};',
+    'const messages=[...document.querySelectorAll("[data-message-author-role]")];',
+    'const users=messages.filter(n=>n.getAttribute("data-message-author-role")==="user");',
+    'const envelopeNeedle="\"envelopeId\": \""+envelopeId+"\"";',
+    'const missionNeedle=missionId ? "\"missionId\": \""+missionId+"\"" : null;',
+    'const matches=users.filter(n=>{const t=String(n.innerText||n.textContent||""); return t.includes("[MCF MISSION ENVELOPE]") && t.includes(envelopeNeedle) && (!missionNeedle || t.includes(missionNeedle));});',
+    'if (matches.length!==1) return {ok:false,error:matches.length?"mission_delivery_anchor_ambiguous":"mission_delivery_anchor_not_found",matchCount:matches.length,url:location.href};',
+    'const user=matches[0];',
+    'const userMessageId=user.getAttribute("data-message-id")||null;',
+    'const idx=messages.indexOf(user);',
+    'let baselineAssistantMessageId=null;',
+    'for(let i=idx-1;i>=0;i-=1){if(messages[i].getAttribute("data-message-author-role")==="assistant"){baselineAssistantMessageId=messages[i].getAttribute("data-message-id")||null;break;}}',
+    'return {ok:Boolean(userMessageId),recovered:true,userMessageId,baselineAssistantMessageId,url:location.href};',
+    '})()',
+  ].join('\n');
+  return wc.executeJavaScript(script, true).catch(error => ({
+    ok: false,
+    error: 'mission_delivery_anchor_recovery_failed',
+    detail: error?.message ?? String(error),
+  }));
+}
+
+
 async function inspectMissionExecution(
   pane,
   {
@@ -1177,7 +1215,16 @@ async function inspectMissionExecution(
     'const observedAssistantMessageId=assistantAfterUser?.getAttribute("data-message-id")||null;',
     'const assistantText=String(assistantAfterUser?.innerText||assistantAfterUser?.textContent||"").trim();',
     'const lateResultObserved=Boolean(observedAssistantMessageId && assistantText);',
-    'return {ok:true,verified:true,activeExecution,generationActive:Boolean(stopControl),busyObserved,activityTextObserved,userAnchorFound,lateResultObserved,assistantMessageId:observedAssistantMessageId,assistantTextLength:assistantText.length,url:location.href};',
+    'const targetUser=userMessageId ? allMessages.find(n=>n.getAttribute("data-message-author-role")==="user" && n.getAttribute("data-message-id")===userMessageId) : null;',
+    'const nextUser=targetUser ? allMessages.slice(allMessages.indexOf(targetUser)+1).find(n=>n.getAttribute("data-message-author-role")==="user") : null;',
+    'const turns=[...document.querySelectorAll("section[data-testid^=conversation-turn-]")];',
+    'const startTurn=targetUser?.closest("section[data-testid^=conversation-turn-]")||null;',
+    'const endTurn=nextUser?.closest("section[data-testid^=conversation-turn-]")||null;',
+    'const startIdx=startTurn ? turns.indexOf(startTurn) : -1;',
+    'const endIdx=endTurn ? turns.indexOf(endTurn) : turns.length;',
+    'const executionText=startIdx>=0 ? turns.slice(startIdx+1,endIdx).map(n=>String(n.innerText||n.textContent||"")).join(" ") : "";',
+    'const toolActivityObserved=/ferramenta chamada|tool called|tool use|usou ferramenta|executando ferramenta|running tool/i.test(executionText);',
+    'return {ok:true,verified:true,activeExecution,generationActive:Boolean(stopControl),busyObserved,activityTextObserved,toolActivityObserved,userAnchorFound,lateResultObserved,assistantMessageId:observedAssistantMessageId,assistantTextLength:assistantText.length,url:location.href};',
     '})()',
   ].join('\n');
 
@@ -1375,6 +1422,7 @@ function createPaneAgentIdentityRuntime() {
     inspectIdentityBootstrap,
     waitForAssistantStart,
     waitForAssistantResult,
+    recoverMissionDelivery,
     inspectMissionExecution,
     cancelAssistantGeneration,
   };
