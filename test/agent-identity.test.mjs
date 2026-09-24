@@ -60,7 +60,7 @@ test('canonical identity validation fails closed on role or contract mismatch', 
 });
 
 test('identity bootstrap binds session, contract digest and strict ready marker', () => {
-  const binding = agentBindingForPane('workspace');
+  const binding = validateCanonicalAgent(agentBindingForPane('workspace'), canonicalSofia);
   const session = {
     sessionId: 'sess-sofia-123',
     traceId: 'trace-sofia-123',

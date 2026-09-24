@@ -2,6 +2,7 @@ import {
   agentBindingForPane,
   paneForAgent,
   validateCanonicalAgent,
+  validateCanonicalSession,
   buildIdentityBootstrap,
   createMissionEnvelope,
   formatMissionEnvelope,
@@ -146,10 +147,20 @@ export class PaneAgentRuntime {
     this.paneMissionQueues = new Map();
     const loaded = loadState();
     if (loaded?.schema === PANE_AGENT_RUNTIME_SCHEMA) {
+      if (loaded.instanceId && loaded.instanceId !== instanceId) {
+        throw new Error('agent_runtime_instance_mismatch');
+      }
+      if (loaded.missionId && loaded.missionId !== missionId) {
+        throw new Error('agent_runtime_profile_mismatch');
+      }
       for (const pane of PANES) {
-        const persistedAgentId = loaded?.bindings?.[pane]?.agentId;
-        const configuredAgentId = agentBindingForPane(pane, this.agentBindings).agentId;
-        if (persistedAgentId && persistedAgentId !== configuredAgentId) {
+        const persisted = loaded?.bindings?.[pane];
+        const configured = agentBindingForPane(pane, this.agentBindings);
+        if (persisted && (
+          (persisted.agentId && persisted.agentId !== configured.agentId)
+          || (persisted.role && persisted.role !== configured.role)
+          || (persisted.contractRef && persisted.contractRef !== configured.contractRef)
+        )) {
           throw new Error('agent_binding_profile_mismatch');
         }
       }
@@ -166,7 +177,25 @@ export class PaneAgentRuntime {
           receipts: Array.isArray(loaded.receipts) ? loaded.receipts.slice(-RECEIPT_LIMIT) : [],
         }
       : initialState(instanceId, missionId);
+    if (!this.startupReady) this.#markPersistedBindingsStale();
     this.#markRestartInterruptions();
+  }
+
+  #markPersistedBindingsStale() {
+    let changed = false;
+    for (const pane of PANES) {
+      const current = this.state.bindings?.[pane];
+      if (current?.state !== 'READY' && current?.handshakeVerified !== true) continue;
+      this.state.bindings[pane] = {
+        ...current,
+        state: 'STALE',
+        handshakeVerified: false,
+        lastError: 'identity_revalidation_required',
+        updatedAt: this.now(),
+      };
+      changed = true;
+    }
+    if (changed) this.#persist();
   }
 
   #markRestartInterruptions() {
@@ -950,13 +979,8 @@ export class PaneAgentRuntime {
         && typeof this.broker.showSession === 'function') {
       try {
         const session = await this.broker.showSession(current.sessionId);
-        if (session
-            && session.agentId === canonicalBinding.agentId
-            && session.role === canonicalBinding.role
-            && session.contractRef === canonicalBinding.contractRef
-            && session.contractDigest === canonicalBinding.contractDigest) {
-          return { session, reused: true };
-        }
+        validateCanonicalSession(canonicalBinding, session);
+        return { session, reused: true };
       } catch {
         // Fall through to a fresh canonical session.
       }
@@ -970,6 +994,7 @@ export class PaneAgentRuntime {
         + ', obedecendo ao contrato canônico MCF e à autoridade de LEANDRO/MESTRE.',
       surface: 'dual-browser-pane:' + pane,
     });
+    validateCanonicalSession(canonicalBinding, session);
     return { session, reused: false };
   }
 
@@ -1122,7 +1147,7 @@ export class PaneAgentRuntime {
     return { ok: true, reused, identity: clone(record), receipt };
   }
 
-  async bootstrap({ agentId = null, force = false } = {}) {
+  async #bootstrapIdentities({ agentId = null, force = false } = {}) {
     const registry = await this.broker.listAgents();
     const canonicalAgents = Array.isArray(registry) ? registry : registry?.agents;
     if (!Array.isArray(canonicalAgents)) throw new Error('canonical_agent_registry_unavailable');
@@ -1153,6 +1178,52 @@ export class PaneAgentRuntime {
     return {
       ok: results.every(result => result.ok),
       agents: results,
+    };
+  }
+
+  async bootstrap({ agentId = null, force = false } = {}) {
+    if (!this.startupReady) {
+      return {
+        ok: false,
+        error: 'agent_runtime_initializing',
+      };
+    }
+    return this.#bootstrapIdentities({ agentId, force });
+  }
+
+  async initializeStartup() {
+    this.markStartupInitializing();
+
+    let recovery;
+    try {
+      recovery = await this.recoverPersistedMissions();
+    } catch (error) {
+      return {
+        ok: false,
+        error: 'startup_recovery_failed',
+        detail: error.message,
+        startupReady: false,
+      };
+    }
+
+    const bootstrap = await this.#bootstrapIdentities({ force: true });
+    if (!bootstrap.ok) {
+      this.markStartupInitializing();
+      return {
+        ok: false,
+        error: 'startup_identity_rebootstrap_failed',
+        recovery,
+        bootstrap,
+        startupReady: false,
+      };
+    }
+
+    this.markStartupReady();
+    return {
+      ok: true,
+      recovery,
+      bootstrap,
+      startupReady: true,
     };
   }
 
