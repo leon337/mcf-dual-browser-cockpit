@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LocalAgentBridge } from './bridge.mjs';
 import { PaneAgentRuntime } from './agent-runtime.mjs';
+import { isGenerationStopControl } from './generation-control.mjs';
 import { instanceConfig, atomicJson } from './instance.mjs';
 
 const instance = instanceConfig(process.argv, app.getPath('userData'));
@@ -431,6 +432,7 @@ async function waitForAssistantStart(
         const marker = ${JSON.stringify(marker)};
         const userMessageId = ${JSON.stringify(userMessageId)};
         const baselineAssistantMessageId = ${JSON.stringify(baselineAssistantMessageId)};
+        const isStopControl = ${isGenerationStopControl.toString()};
         const allMessages = [...document.querySelectorAll('[data-message-author-role]')];
         const assistants = allMessages.filter(node =>
           node.getAttribute('data-message-author-role') === 'assistant'
@@ -501,16 +503,12 @@ async function waitForAssistantStart(
         const stopControl = [...document.querySelectorAll('button')].find(button => {
           const rect = button.getBoundingClientRect();
           if (!(rect.width > 0 && rect.height > 0)) return false;
-          const label = String(
-            button.getAttribute('aria-label')
-            || button.getAttribute('data-testid')
-            || button.title
-            || button.innerText
-            || ''
-          ).toLowerCase();
-          return label.includes('stop generating')
-            || label.includes('parar de gerar')
-            || label === 'stop-button';
+          return isStopControl({
+            ariaLabel: button.getAttribute('aria-label'),
+            testId: button.getAttribute('data-testid'),
+            title: button.title,
+            text: button.innerText,
+          });
         });
 
         return {
@@ -556,19 +554,16 @@ async function waitForAssistantStart(
   }
 
   const generationActive = await wc.executeJavaScript(`(() => {
+    const isStopControl = ${isGenerationStopControl.toString()};
     return [...document.querySelectorAll('button')].some(button => {
       const rect = button.getBoundingClientRect();
       if (!(rect.width > 0 && rect.height > 0)) return false;
-      const label = String(
-        button.getAttribute('aria-label')
-        || button.getAttribute('data-testid')
-        || button.title
-        || button.innerText
-        || ''
-      ).toLowerCase();
-      return label.includes('stop generating')
-        || label.includes('parar de gerar')
-        || label === 'stop-button';
+      return isStopControl({
+        ariaLabel: button.getAttribute('aria-label'),
+        testId: button.getAttribute('data-testid'),
+        title: button.title,
+        text: button.innerText,
+      });
     });
   })()`, true).catch(() => false);
 
@@ -608,6 +603,7 @@ async function waitForAssistantResult(
         const marker = ${JSON.stringify(marker)};
         const acceptedAssistantMessageId = ${JSON.stringify(assistantMessageId)};
         const userMessageId = ${JSON.stringify(userMessageId)};
+        const isStopControl = ${isGenerationStopControl.toString()};
         const visible = (el) => {
           if (!el) return false;
           const rect = el.getBoundingClientRect();
@@ -698,16 +694,12 @@ async function waitForAssistantResult(
           : null;
         const stopControl = [...document.querySelectorAll('button')].find(button => {
           if (!visible(button)) return false;
-          const label = String(
-            button.getAttribute('aria-label')
-            || button.getAttribute('data-testid')
-            || button.title
-            || button.innerText
-            || ''
-          ).toLowerCase();
-          return label.includes('stop generating')
-            || label.includes('parar de gerar')
-            || label === 'stop-button';
+          return isStopControl({
+            ariaLabel: button.getAttribute('aria-label'),
+            testId: button.getAttribute('data-testid'),
+            title: button.title,
+            text: button.innerText,
+          });
         });
 
         const turn = message.closest('section[data-testid^="conversation-turn-"]');
