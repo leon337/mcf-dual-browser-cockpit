@@ -1615,7 +1615,7 @@ test('runtime explicitly retries a failed logical mission without breaking idemp
         return {
           ok: false,
           pane,
-          error: 'message_send_unconfirmed',
+          error: 'composer_not_found',
           cleanup: { ok: true, cleaned: true, remainingLength: 0 },
           verification: {
             ok: true,
@@ -2881,7 +2881,7 @@ test('reconciliation requires caller evidence plus live proof and refuses active
     evidence: { operatorCheckpoint: 'late-check' },
   });
   assert.equal(late.ok, false);
-  assert.equal(late.error, 'late_result_recovery_required');
+  assert.equal(late.error, 'late_result_recovery_incomplete');
 
   observation = {
     ...observation,
