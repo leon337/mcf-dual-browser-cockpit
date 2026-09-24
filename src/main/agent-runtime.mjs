@@ -63,6 +63,7 @@ export class PaneAgentRuntime {
     loadState = () => null,
     saveState = () => {},
     now = () => new Date().toISOString(),
+    startupReady = true,
   }) {
     if (!instanceId || !missionId || !broker || !surface) {
       throw new Error('invalid_agent_runtime_configuration');
@@ -74,6 +75,7 @@ export class PaneAgentRuntime {
     this.loadState = loadState;
     this.saveState = saveState;
     this.now = now;
+    this.startupReady = Boolean(startupReady);
     this.missionTasks = new Map();
     this.paneMissionQueues = new Map();
     const loaded = loadState();
@@ -131,6 +133,20 @@ export class PaneAgentRuntime {
 
   listReceipts() {
     return clone(this.state.receipts);
+  }
+
+  isStartupReady() {
+    return this.startupReady;
+  }
+
+  markStartupReady() {
+    this.startupReady = true;
+    return { ok: true, ready: true, startupReady: true };
+  }
+
+  markStartupInitializing() {
+    this.startupReady = false;
+    return { ok: true, ready: false };
   }
 
   listMissions() {
@@ -392,6 +408,13 @@ export class PaneAgentRuntime {
   }
 
   async dispatchMission(input) {
+    if (!this.startupReady) {
+      return {
+        ok: false,
+        error: 'agent_runtime_initializing',
+      };
+    }
+
     const pane = paneForAgent(input?.agentId);
     const manifest = agentBindingForPane(pane);
 

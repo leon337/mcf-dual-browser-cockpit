@@ -150,6 +150,14 @@ Exemplo de missão:
       "objective": "Validar a arquitetura."
     }
 
+### Gate de startup e recovery
+
+A Bridge pode estar ouvindo antes de o bootstrap de identidade e o recovery de missões persistidas terminarem. Durante essa janela, novas missões são recusadas com HTTP `503` e:
+
+    {"ok":false,"error":"agent_runtime_initializing"}
+
+O gate só é aberto depois que `bootstrap + recoverPersistedMissions()` terminam. Isso impede que uma missão seja aceita durante uma inicialização ainda instável e depois seja reinterpretada como trabalho interrompido.
+
 ### Retry explícito de tentativa terminal
 
 Chamadas normais continuam idempotentes: repetir a mesma missão lógica (`missionId` + agente + parent + mesmo intent) retorna a execução existente e não envia novamente.

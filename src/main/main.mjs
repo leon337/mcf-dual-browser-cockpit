@@ -900,6 +900,7 @@ function createPaneAgentIdentityRuntime() {
     surface,
     loadState: loadPaneAgentState,
     saveState: savePaneAgentState,
+    startupReady: false,
   });
 }
 
@@ -1384,9 +1385,9 @@ function createWindow() {
         });
       }
 
-      void paneAgentRuntime?.recoverPersistedMissions()
-        .then((recovery) => {
-          if (!recovery?.recovered?.length) return;
+      try {
+        const recovery = await paneAgentRuntime?.recoverPersistedMissions();
+        if (recovery?.recovered?.length) {
           const completed = recovery.recovered.filter(item => item.state === 'COMPLETED').length;
           const unresolved = recovery.recovered.length - completed;
           emitBridgeEvent({
@@ -1395,13 +1396,19 @@ function createWindow() {
               + completed + ' concluída(s), '
               + unresolved + ' não verificada(s).',
           });
-        })
-        .catch((error) => {
-          emitBridgeEvent({
-            level: 'error',
-            message: 'MCF Mission Recovery falhou: ' + error.message,
-          });
+        }
+        paneAgentRuntime?.markStartupReady();
+        emitBridgeEvent({
+          level: 'ok',
+          message: 'MCF Agent Runtime: startup/recovery concluído — missões liberadas.',
         });
+      } catch (error) {
+        paneAgentRuntime?.markStartupInitializing();
+        emitBridgeEvent({
+          level: 'error',
+          message: 'MCF Mission Recovery falhou: ' + error.message,
+        });
+      }
     })
     .catch((error) => {
       persistBridgeState(null);

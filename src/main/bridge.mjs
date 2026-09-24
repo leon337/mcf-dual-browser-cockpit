@@ -695,7 +695,12 @@ export class LocalAgentBridge {
         }
         const body = await readJson(req);
         const result = await this.dispatchAgentMission(body ?? {});
-        return json(res, result?.ok ? 200 : 422, result ?? { ok: false, error: 'mission_dispatch_failed' });
+        const status = result?.ok
+          ? 200
+          : result?.error === 'agent_runtime_initializing'
+            ? 503
+            : 422;
+        return json(res, status, result ?? { ok: false, error: 'mission_dispatch_failed' });
       }
 
       if (req.method === 'GET' && requestUrl.pathname === '/v1/agent-receipts') {

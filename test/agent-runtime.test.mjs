@@ -1561,3 +1561,71 @@ test('runtime explicitly retries a failed logical mission without breaking idemp
   assert.equal(parent.active, 0);
   assert.equal(parent.closable, true);
 });
+
+test('runtime blocks mission dispatch until startup recovery is explicitly completed', async () => {
+  let state = null;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/startup-gate',
+    freshConversation: async () => {},
+    sendMessage: async pane => ({
+      ok: true,
+      pane,
+      deliveryConfirmed: true,
+      composerCleared: true,
+      conversationAdvanced: true,
+      userMessageId: 'user-startup-gate',
+      baselineAssistantMessageId: 'assistant-before-startup-gate',
+      url: 'https://chatgpt.test/' + pane + '/c/startup-gate',
+    }),
+    waitForAssistantMarker: async () => true,
+    waitForAssistantResult: async (_pane, { marker }) => ({
+      ok: true,
+      generationFinished: true,
+      generationActive: false,
+      terminalSignal: 'transport_end_event',
+      assistantMessageId: 'assistant-startup-gate-final',
+      conversationId: 'startup-gate',
+      text: marker + '\nResultado final.',
+    }),
+  };
+
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-AGENT-LIFECYCLE-002',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+    startupReady: false,
+  });
+
+  await runtime.bootstrap();
+
+  const blocked = await runtime.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'MISSION-STARTUP-GATE-1',
+    parentMissionId: 'PARENT-STARTUP-GATE-1',
+    objective: 'Não aceitar antes do recovery.',
+  });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.error, 'agent_runtime_initializing');
+  assert.equal(runtime.listMissions().length, 0);
+
+  runtime.markStartupReady();
+
+  const accepted = await runtime.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'MISSION-STARTUP-GATE-1',
+    parentMissionId: 'PARENT-STARTUP-GATE-1',
+    objective: 'Não aceitar antes do recovery.',
+  });
+  assert.equal(accepted.ok, true);
+  await runtime.waitForPendingMissions();
+  assert.equal(runtime.getMission(accepted.envelope.envelopeId).state, 'COMPLETED');
+});

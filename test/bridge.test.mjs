@@ -605,3 +605,41 @@ test('post-send stabilization cleans only automation residuals and preserves unk
   assert.equal(preserved.cleanup?.reason, 'unrecognized_draft_preserved');
   assert.equal(cleanupCalls, 1);
 });
+
+test('mission endpoint returns 503 while agent runtime startup recovery is incomplete', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-runtime-startup-gate-'));
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => ({
+      isDestroyed: () => false,
+      getURL: () => 'https://workspace.test/',
+      getTitle: () => 'workspace',
+      isLoading: () => false,
+      navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    }),
+    captureDir: dir,
+    instanceId: 'test',
+    dispatchAgentMission: async () => ({
+      ok: false,
+      error: 'agent_runtime_initializing',
+    }),
+  });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive: true }); });
+
+  const response = await fetch('http://127.0.0.1:' + bridge.port + '/v1/mission-envelope', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + bridge.token,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      agentId: 'Sofia',
+      missionId: 'MISSION-STARTUP-GATE-HTTP',
+      objective: 'Aguardar startup.',
+    }),
+  });
+  assert.equal(response.status, 503);
+  const body = await response.json();
+  assert.equal(body.ok, false);
+  assert.equal(body.error, 'agent_runtime_initializing');
+});
