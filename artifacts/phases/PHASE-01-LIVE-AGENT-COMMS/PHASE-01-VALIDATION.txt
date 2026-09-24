@@ -41,5 +41,11 @@ Audit lineage:
 R1 result=acfb7e5a57ab1756493561191deaebaef863912fb3ac3a42c998901ff058953f decision=FAIL documentation-only
 R2 result=7630b74f93c60136eb394b196d823956c7ffe94dcdbf25b8deda210324570500 decision=PASS status=SUPERSEDED_AS_FINAL_GATE
 
+Final independent audit R3:
+PASS
+result=94b73f9af663672aab5afbbd20f910a3c46290968d2eb6c3eadad05e01ca7ea0
+Critical=0 High=0 Medium blocker=0 Low blocker=0
+Residual technical/evidence requirements=NONE
+
 Current gate:
-EMILY_FINAL_EXACT_ARTIFACT_AUDIT_R3
+MERGE_PR_8

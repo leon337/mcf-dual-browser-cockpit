@@ -62,5 +62,18 @@ Four exact native pane captures are versioned under visual/ and hashed in PHASE-
 R1: FAIL with 0 Critical and 1 High limited to stale closeout documentation; no functional Critical/High identified.
 R2: PASS for the documentation remediation, but superseded as final gate after the exact AppImage correction.
 
+## Independent final audit R3
+Emily audited the exact active production artifact and closeout head:
+- mission: MCF-LIVE-AGENT-COMMS-001-EMILY-FINAL-EXACT-R3
+- result SHA-256: 94b73f9af663672aab5afbbd20f910a3c46290968d2eb6c3eadad05e01ca7ea0
+- decision: PASS
+- Critical: 0
+- High: 0
+- Medium blocker: 0
+- Low blocker: 0
+- residual technical/evidence requirements: none
+
+Emily confirmed release code c11e3984fc76a19780593d35eaabc7f903193322 remains qualified, closeout head 4d51a176… is consistent, exact AppImage ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951 is the recorded production artifact, replay/lifecycle/isolation evidence is coherent, and no blocker remains.
+
 ## Current gate
-The PRF now records only the exact active production artifact. Final gate: Emily R3 against the current PR head, current CI, release code SHA c11e3984fc76a19780593d35eaabc7f903193322, AppImage ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951, exact smoke and replay evidence.
+READY_FOR_MERGE_PR_8 under LEANDRO's standing authorization for this mission.

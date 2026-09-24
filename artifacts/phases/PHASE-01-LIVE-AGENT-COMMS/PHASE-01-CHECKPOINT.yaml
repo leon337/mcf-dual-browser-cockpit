@@ -3,7 +3,7 @@ phase_id: PHASE-01-LIVE-AGENT-COMMS
 class: C
 authority: LEANDRO
 orchestrator: MESTRE
-state: READY_FOR_FINAL_EXACT_AUDIT_R3
+state: READY_FOR_MERGE_PR_8
 baseline_sha: 6fcc47c4b64f6f5d8b93f09b96d8f98947c9fdb8
 version: 0.6.0
 release_code_sha: c11e3984fc76a19780593d35eaabc7f903193322
@@ -43,7 +43,16 @@ audit_r2:
   critical: 0
   high: 0
   status: SUPERSEDED_AS_FINAL_GATE_BY_EXACT_ARTIFACT_PROMOTION
-next_gate: EMILY_FINAL_EXACT_ARTIFACT_AUDIT_R3
+audit_r3:
+  state: COMPLETED
+  decision: PASS
+  result_sha256: 94b73f9af663672aab5afbbd20f910a3c46290968d2eb6c3eadad05e01ca7ea0
+  critical: 0
+  high: 0
+  medium_blocker: 0
+  low_blocker: 0
+  residual_requirements: NONE
+next_gate: MERGE_PR_8
 authorization:
   finalize_and_production: AUTHORIZED_BY_LEANDRO
 prohibitions:

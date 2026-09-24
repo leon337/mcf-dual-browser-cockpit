@@ -16,4 +16,5 @@
 14. Emily R1 found no functional Critical/High; its single High concerned stale closeout documentation.
 15. The documentation finding was remediated.
 16. Emily R2 returned PASS on that remediation, but it is retained only as lineage because the production AppImage was subsequently corrected to the exact candidate.
-17. Final gate is Emily R3 against the current PRF, release code SHA c11e3984fc76a19780593d35eaabc7f903193322, exact AppImage ee72e8c1505cc0e69dd4eb7738f1909b0412df01b9621f450fd154daa70e7951, current PR head and current CI.
+17. Emily R3 independently audited the exact artifact and current closeout head and returned PASS, result 94b73f9af663672aab5afbbd20f910a3c46290968d2eb6c3eadad05e01ca7ea0, with Critical=0, High=0, Medium blocker=0, Low blocker=0, and no residual technical/evidence requirement.
+18. MESTRE sets the gate to READY_FOR_MERGE_PR_8 under LEANDRO's standing authorization for this mission.

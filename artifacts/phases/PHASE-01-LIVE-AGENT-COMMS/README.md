@@ -18,4 +18,4 @@ Read in this order:
 
 visual/exact-c11e398-* contains the four native final pane captures.
 
-Current gate: exact release evidence recorded; R2 retained as superseded lineage; awaiting final exact-artifact Emily R3.
+Current gate: Emily R3 PASS; READY_FOR_MERGE_PR_8. R1/R2 are retained only as audit lineage.
