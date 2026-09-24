@@ -1078,6 +1078,8 @@ export class PaneAgentRuntime {
         traceId: current.traceId ?? null,
         state: current.state ?? 'UNBOUND',
         handshakeVerified: Boolean(current.handshakeVerified),
+        reconciliationRequired: current.reconciliationRequired === true,
+        reconciliationReason: current.reconciliationReason ?? null,
         chatUrl: current.chatUrl ?? null,
         lastError: current.lastError ?? null,
         updatedAt: current.updatedAt ?? null,
@@ -1117,27 +1119,187 @@ export class PaneAgentRuntime {
   }
 
   async #freshConversationWithRetry(pane) {
-    let lastError = null;
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        return await this.surface.freshConversation(pane);
-      } catch (error) {
-        lastError = error;
-        const message = String(error?.message || error || '');
-        const transient = message.includes('ERR_ABORTED') || message.includes('(-3)');
-        if (!transient || attempt === 3) throw error;
-        await new Promise(resolve => setTimeout(resolve, attempt * 150));
+    try {
+      return await this.surface.freshConversation(pane);
+    } catch (error) {
+      const message = String(error?.message || error || '');
+      const transient = message.includes('ERR_ABORTED') || message.includes('(-3)');
+      if (!transient || typeof this.surface.reconcileFreshConversation !== 'function') {
+        throw error;
       }
+
+      const reconciliation = await this.surface.reconcileFreshConversation(pane);
+      if (reconciliation?.ok
+          && reconciliation?.fresh === true
+          && reconciliation?.composerAvailable === true) {
+        return {
+          ...reconciliation,
+          recoveredAfterUnconfirmedNavigation: true,
+        };
+      }
+
+      const uncertain = new Error('fresh_conversation_outcome_unknown');
+      uncertain.cause = error;
+      throw uncertain;
     }
-    throw lastError ?? new Error('fresh_conversation_failed');
+  }
+
+  #bootstrapNeedsReconciliation(current) {
+    if (!current || current.handshakeVerified === true || !current.sessionId) return false;
+    return current.reconciliationRequired === true
+      || current.lastError === 'message_send_unconfirmed'
+      || current.state === 'RECONCILING'
+      || (current.state === 'UNVERIFIED' && Boolean(current.pendingBootstrap));
+  }
+
+  async #reconcileBootstrapAttempt(pane, binding, session, current, { waitForMarker = true } = {}) {
+    const marker = 'MCF_AGENT_READY agent_id=' + binding.agentId + ' session_id=' + session.sessionId;
+    if (waitForMarker && typeof this.surface.waitForAssistantMarker === 'function') {
+      await this.surface.waitForAssistantMarker(pane, marker);
+    }
+
+    let evidence = {
+      ok: false,
+      verified: false,
+      error: 'identity_bootstrap_inspector_unavailable',
+    };
+    if (typeof this.surface.inspectIdentityBootstrap === 'function') {
+      evidence = await this.surface.inspectIdentityBootstrap(pane, {
+        agentId: binding.agentId,
+        sessionId: session.sessionId,
+        contractDigest: binding.contractDigest,
+        marker,
+        userMessageId: current?.pendingBootstrap?.userMessageId ?? null,
+        expectedConversationUrl: current?.pendingBootstrap?.deliveryConfirmed === true
+          ? current?.pendingBootstrap?.url ?? null
+          : null,
+        expectedProjectRoot: current?.pendingBootstrap?.expectedProjectRoot ?? null,
+      });
+    }
+
+    if (!evidence?.ok
+        || evidence?.verified !== true
+        || evidence?.userAnchorFound !== true
+        || evidence?.markerObserved !== true
+        || evidence?.conflictingAttempt === true) {
+      const record = this.state.bindings[pane] ?? current;
+      record.state = 'RECONCILING';
+      record.handshakeVerified = false;
+      record.reconciliationRequired = true;
+      record.reconciliationReason = record.reconciliationReason
+        ?? 'identity_bootstrap_delivery_uncertain';
+      record.lastError = 'identity_bootstrap_reconciliation_required';
+      record.updatedAt = this.now();
+      this.state.bindings[pane] = record;
+      this.#persist();
+      this.#record(createAgentReceipt({
+        kind: 'IDENTITY_BOOTSTRAP_RECONCILIATION_PENDING',
+        status: 'UNVERIFIED',
+        binding,
+        session,
+        evidence: {
+          pane,
+          marker,
+          reason: evidence?.error ?? 'identity_bootstrap_evidence_not_correlated',
+          userAnchorFound: evidence?.userAnchorFound === true,
+          markerObserved: evidence?.markerObserved === true,
+          conflictingAttempt: evidence?.conflictingAttempt === true,
+          url: evidence?.url ?? this.surface.getUrl(pane) ?? null,
+        },
+        now: this.now(),
+      }));
+      return {
+        ok: false,
+        error: 'identity_bootstrap_reconciliation_required',
+        identity: clone(record),
+        reconciliation: clone(evidence),
+      };
+    }
+
+    const record = this.state.bindings[pane] ?? current;
+    record.chatUrl = evidence.url ?? record.chatUrl ?? this.surface.getUrl(pane) ?? null;
+    record.handshakeVerified = true;
+    record.state = 'READY';
+    record.lastError = null;
+    record.reconciliationRequired = false;
+    record.reconciliationReason = null;
+    record.pendingBootstrap = null;
+    record.updatedAt = this.now();
+    this.state.bindings[pane] = record;
+    this.#persist();
+
+    if (typeof this.broker.markOpen === 'function') {
+      await this.broker.markOpen(session.sessionId, record.chatUrl);
+    }
+
+    const receipt = this.#record(createAgentReceipt({
+      kind: 'HANDSHAKE_VERIFIED',
+      status: 'READY',
+      binding,
+      session,
+      evidence: {
+        pane,
+        url: record.chatUrl,
+        marker,
+        reconciled: true,
+        userMessageId: evidence.userMessageId ?? null,
+        assistantMessageId: evidence.assistantMessageId ?? null,
+      },
+      now: this.now(),
+    }));
+    return {
+      ok: true,
+      reused: true,
+      reconciled: true,
+      identity: clone(record),
+      receipt,
+    };
   }
 
   async #bootstrapPane(pane, canonicalAgents, force) {
     const manifest = agentBindingForPane(pane, this.agentBindings);
     const canonical = canonicalAgents.find(agent => agent.agentId === manifest.agentId);
     const binding = validateCanonicalAgent(manifest, canonical);
-    const { session, reused } = await this.#sessionForPane(pane, binding, force);
     const current = this.state.bindings[pane];
+
+    if (this.#bootstrapNeedsReconciliation(current)) {
+      if (current.contractDigest !== binding.contractDigest) {
+        return {
+          ok: false,
+          error: 'identity_bootstrap_reconciliation_digest_mismatch',
+          identity: clone(current),
+        };
+      }
+      if (typeof this.broker.showSession !== 'function') {
+        return {
+          ok: false,
+          error: 'identity_bootstrap_reconciliation_session_unavailable',
+          identity: clone(current),
+        };
+      }
+
+      let persistedSession;
+      try {
+        persistedSession = await this.broker.showSession(current.sessionId);
+        buildIdentityBootstrap({ binding, session: persistedSession });
+      } catch {
+        return {
+          ok: false,
+          error: 'identity_bootstrap_reconciliation_session_invalid',
+          identity: clone(current),
+        };
+      }
+
+      return this.#reconcileBootstrapAttempt(
+        pane,
+        binding,
+        persistedSession,
+        current,
+        { waitForMarker: true },
+      );
+    }
+
+    const { session, reused } = await this.#sessionForPane(pane, binding, force);
 
     if (!force
         && reused
@@ -1159,82 +1321,127 @@ export class PaneAgentRuntime {
       traceId: session.traceId,
       state: 'BOOTSTRAPPING',
       handshakeVerified: false,
+      reconciliationRequired: false,
+      reconciliationReason: null,
+      pendingBootstrap: null,
       chatUrl: null,
       lastError: null,
       updatedAt: this.now(),
     };
     this.#persist();
 
+    let freshConversation = null;
     if (!reused || force || current?.state !== 'READY') {
-      await this.#freshConversationWithRetry(pane);
+      freshConversation = await this.#freshConversationWithRetry(pane);
     }
 
     const bootstrap = buildIdentityBootstrap({ binding, session });
     const marker = 'MCF_AGENT_READY agent_id=' + binding.agentId + ' session_id=' + session.sessionId;
+    const pendingBootstrap = {
+      marker,
+      agentId: binding.agentId,
+      sessionId: session.sessionId,
+      contractDigest: binding.contractDigest,
+      expectedProjectRoot: freshConversation?.url ?? null,
+      deliveryConfirmed: false,
+      userMessageId: null,
+      url: null,
+      startedAt: this.now(),
+    };
+
     const delivery = await this.surface.sendMessage(pane, bootstrap);
-    let verifiedFromRecoveredDelivery = false;
 
     if (!delivery?.ok) {
       const deliveryError = delivery?.error ?? 'identity_bootstrap_delivery_failed';
       if (deliveryError === 'message_send_unconfirmed') {
-        const markerObserved = await this.surface.waitForAssistantMarker(pane, marker);
-        if (markerObserved) {
-          verifiedFromRecoveredDelivery = true;
-          this.#record(createAgentReceipt({
-            kind: 'IDENTITY_BOOTSTRAP_DELIVERY_RECOVERED',
-            status: 'DELIVERED',
-            binding,
-            session,
-            evidence: {
-              pane,
-              error: deliveryError,
-              marker,
-              markerObserved: true,
-              url: this.surface.getUrl(pane) ?? null,
-            },
-            now: this.now(),
-          }));
-        }
-      }
+        const uncertain = this.state.bindings[pane];
+        uncertain.state = 'RECONCILING';
+        uncertain.handshakeVerified = false;
+        uncertain.reconciliationRequired = true;
+        uncertain.reconciliationReason = 'identity_bootstrap_delivery_uncertain';
+        uncertain.pendingBootstrap = pendingBootstrap;
+        uncertain.chatUrl = this.surface.getUrl(pane) ?? null;
+        uncertain.lastError = deliveryError;
+        uncertain.updatedAt = this.now();
+        this.#persist();
 
-      if (!verifiedFromRecoveredDelivery) {
-        const failed = this.state.bindings[pane];
-        failed.state = 'ERROR';
-        failed.lastError = deliveryError;
-        failed.updatedAt = this.now();
         this.#record(createAgentReceipt({
-          kind: 'IDENTITY_BOOTSTRAP_DELIVERY_FAILED',
-          status: 'FAILED',
+          kind: 'IDENTITY_BOOTSTRAP_DELIVERY_UNCERTAIN',
+          status: 'UNVERIFIED',
           binding,
           session,
-          evidence: { error: failed.lastError, pane },
+          evidence: {
+            pane,
+            error: deliveryError,
+            marker,
+            url: uncertain.chatUrl,
+            reconciliationRequired: true,
+          },
           now: this.now(),
         }));
-        return { ok: false, error: failed.lastError, identity: clone(failed) };
+
+        return this.#reconcileBootstrapAttempt(
+          pane,
+          binding,
+          session,
+          uncertain,
+          { waitForMarker: true },
+        );
       }
-    } else {
+
+      const failed = this.state.bindings[pane];
+      failed.state = 'ERROR';
+      failed.lastError = deliveryError;
+      failed.updatedAt = this.now();
       this.#record(createAgentReceipt({
-        kind: 'IDENTITY_BOOTSTRAP_DELIVERED',
-        status: 'DELIVERED',
+        kind: 'IDENTITY_BOOTSTRAP_DELIVERY_FAILED',
+        status: 'FAILED',
         binding,
         session,
-        evidence: {
-          pane,
-          url: delivery.url ?? this.surface.getUrl(pane) ?? null,
-          method: delivery.method ?? null,
-        },
+        evidence: { error: failed.lastError, pane },
         now: this.now(),
       }));
+      return { ok: false, error: failed.lastError, identity: clone(failed) };
     }
 
-    const verified = verifiedFromRecoveredDelivery
-      || await this.surface.waitForAssistantMarker(pane, marker);
+    this.#record(createAgentReceipt({
+      kind: 'IDENTITY_BOOTSTRAP_DELIVERED',
+      status: 'DELIVERED',
+      binding,
+      session,
+      evidence: {
+        pane,
+        url: delivery.url ?? this.surface.getUrl(pane) ?? null,
+        method: delivery.method ?? null,
+        userMessageId: delivery.userMessageId ?? null,
+      },
+      now: this.now(),
+    }));
 
+    const awaitingHandshake = this.state.bindings[pane];
+    awaitingHandshake.chatUrl = delivery.url ?? this.surface.getUrl(pane) ?? null;
+    awaitingHandshake.state = 'UNVERIFIED';
+    awaitingHandshake.handshakeVerified = false;
+    awaitingHandshake.reconciliationRequired = true;
+    awaitingHandshake.reconciliationReason = 'identity_handshake_pending';
+    awaitingHandshake.pendingBootstrap = {
+      ...pendingBootstrap,
+      deliveryConfirmed: true,
+      userMessageId: delivery.userMessageId ?? null,
+      url: delivery.url ?? null,
+    };
+    awaitingHandshake.lastError = 'identity_handshake_pending';
+    awaitingHandshake.updatedAt = this.now();
+    this.#persist();
+
+    const verified = await this.surface.waitForAssistantMarker(pane, marker);
     const record = this.state.bindings[pane];
-    record.chatUrl = delivery.url ?? this.surface.getUrl(pane) ?? null;
     record.handshakeVerified = Boolean(verified);
     record.state = verified ? 'READY' : 'UNVERIFIED';
     record.lastError = verified ? null : 'identity_handshake_not_observed';
+    record.reconciliationRequired = !verified;
+    record.reconciliationReason = verified ? null : 'identity_handshake_not_observed';
+    if (verified) record.pendingBootstrap = null;
     record.updatedAt = this.now();
     this.#persist();
 
@@ -1244,7 +1451,12 @@ export class PaneAgentRuntime {
         status: 'UNVERIFIED',
         binding,
         session,
-        evidence: { pane, url: record.chatUrl },
+        evidence: {
+          pane,
+          url: record.chatUrl,
+          userMessageId: delivery.userMessageId ?? null,
+          reconciliationRequired: true,
+        },
         now: this.now(),
       }));
       return { ok: false, error: record.lastError, identity: clone(record) };
@@ -1259,7 +1471,12 @@ export class PaneAgentRuntime {
       status: 'READY',
       binding,
       session,
-      evidence: { pane, url: record.chatUrl, marker },
+      evidence: {
+        pane,
+        url: record.chatUrl,
+        marker,
+        userMessageId: delivery.userMessageId ?? null,
+      },
       now: this.now(),
     }));
     return { ok: true, reused, identity: clone(record), receipt };
