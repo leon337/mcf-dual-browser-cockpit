@@ -222,24 +222,19 @@ export class LocalAgentBridge {
       };
 
       if (enforceChatMode) {
-        const findModeButton = (label) => [...document.querySelectorAll('button[role="radio"]')]
-          .filter(visible)
-          .find(button => String(button.innerText || button.textContent || '').trim() === label);
-        let chatMode = findModeButton('Chat');
-        let workMode = findModeButton('Work');
-
-        if (chatMode && chatMode.getAttribute('data-state') !== 'on') {
+        const currentSend = document.querySelector('[data-testid="send-button"]');
+        const blocked = currentSend?.getAttribute('aria-disabled') === 'true';
+        if (blocked) {
+          const chatMode = [...document.querySelectorAll('button[role="radio"]')]
+            .filter(visible)
+            .find(button => String(button.innerText || button.textContent || '').trim() === 'Chat');
+          if (!chatMode) return { ok:false, error:'chat_mode_toggle_not_found' };
           chatMode.click();
-          await new Promise(resolve => setTimeout(resolve, 300));
-          chatMode = findModeButton('Chat');
-          workMode = findModeButton('Work');
-        }
-
-        if (chatMode && chatMode.getAttribute('data-state') !== 'on') {
-          return { ok:false, error:'chat_mode_switch_failed' };
-        }
-        if (chatMode && workMode && workMode.getAttribute('data-state') === 'on') {
-          return { ok:false, error:'chat_mode_switch_failed' };
+          await new Promise(resolve => setTimeout(resolve, 900));
+          const refreshedSend = document.querySelector('[data-testid="send-button"]');
+          if (refreshedSend?.getAttribute('aria-disabled') === 'true') {
+            return { ok:false, error:'chat_mode_switch_failed' };
+          }
         }
       }
 

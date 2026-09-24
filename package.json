@@ -1,6 +1,6 @@
 {
   "name": "mcf-dual-browser-cockpit",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Cockpit desktop com ChatGPT e navegador operacional isolados, pronto para integração com MCF/agents.",
   "type": "module",
   "main": "src/main/main.mjs",
