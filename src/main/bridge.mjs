@@ -140,6 +140,8 @@ export class LocalAgentBridge {
     this.agentProfile = agentProfile;
     this.paused = false;
     this.busy = false;
+    this.mutationQueueTail = Promise.resolve();
+    this.queuedMutations = 0;
     this.uploadDir = uploadDir;
     this.captureWorkspace = captureWorkspace;
     this.openAgentSession = openAgentSession;
@@ -171,6 +173,7 @@ export class LocalAgentBridge {
       agentProfile: this.agentProfile,
       paused: this.paused,
       busy: this.busy,
+      queuedMutations: this.queuedMutations,
       host: '127.0.0.1',
       port: this.port,
       token: this.server ? this.token : null,
@@ -646,8 +649,27 @@ export class LocalAgentBridge {
     };
   }
 
+  async #acquireMutationTurn() {
+    const previous = this.mutationQueueTail;
+    let releaseGate;
+    const gate = new Promise(resolve => { releaseGate = resolve; });
+    this.queuedMutations += 1;
+    this.mutationQueueTail = previous.catch(() => null).then(() => gate);
+    await previous.catch(() => null);
+    this.queuedMutations = Math.max(0, this.queuedMutations - 1);
+    this.busy = true;
+
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.busy = false;
+      releaseGate();
+    };
+  }
+
   async #handle(req, res) {
-    let acquired = false;
+    let releaseMutationTurn = null;
     try {
       if (req.headers.host !== `127.0.0.1:${this.port}` && req.headers.host !== `localhost:${this.port}`) {
         return json(res, 403, { ok: false, error: 'invalid_host' });
@@ -712,9 +734,8 @@ export class LocalAgentBridge {
 
       if (req.method === 'POST') {
         if (this.paused) return json(res, 423, { ok: false, error: 'automation_paused' });
-        if (this.busy) return json(res, 409, { ok: false, error: 'automation_busy' });
-        this.busy = true;
-        acquired = true;
+        releaseMutationTurn = await this.#acquireMutationTurn();
+        if (this.paused) return json(res, 423, { ok: false, error: 'automation_paused' });
       }
 
       if (req.method === 'GET' && requestUrl.pathname === '/v1/agent-sessions') {
@@ -1248,7 +1269,7 @@ export class LocalAgentBridge {
       this.onEvent({ level: 'error', message: `Bridge: ${code}` });
       if (!res.destroyed) return json(res, code === 'invalid_json' ? 400 : 500, { ok: false, error: code });
     } finally {
-      if (acquired) this.busy = false;
+      releaseMutationTurn?.();
     }
   }
 }
