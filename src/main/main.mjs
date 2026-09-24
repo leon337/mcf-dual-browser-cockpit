@@ -5,6 +5,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LocalAgentBridge } from './bridge.mjs';
+import { PaneAgentRuntime } from './agent-runtime.mjs';
 import { instanceConfig, atomicJson } from './instance.mjs';
 
 const instance = instanceConfig(process.argv, app.getPath('userData'));
@@ -35,9 +36,11 @@ const agentSessionWindows = new Map();
 const agentSessionRuntime = new Map();
 let splitRatio = 0.5;
 let bridge = null;
+let paneAgentRuntime = null;
 let restoredRuntimeState = null;
 let runtimePersistTimer = null;
 const RUNTIME_STATE_VERSION = 1;
+const PANE_AGENT_MISSION_ID = 'MCF-DUAL-AGENT-IDENTITY-001';
 
 const viewState = {
   chat: { url: CHATGPT_URL, title: 'ChatGPT', loading: true, canGoBack: false, canGoForward: false },
@@ -324,6 +327,134 @@ async function runAgentSessionTool(args) {
   } catch {
     throw new Error('mcf_agent_session_invalid_json');
   }
+}
+
+
+function paneAgentStateFile() {
+  return path.join(app.getPath('userData'), 'agent-identities.json');
+}
+
+function loadPaneAgentState() {
+  try {
+    const file = paneAgentStateFile();
+    if (!existsSync(file)) return null;
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    emitBridgeEvent({ level: 'error', message: 'Agent Identity: estado inválido — ' + error.message });
+    return null;
+  }
+}
+
+function savePaneAgentState(state) {
+  atomicJson(paneAgentStateFile(), state);
+}
+
+function projectRootForPane(pane) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) return CHATGPT_URL;
+  try {
+    const current = new URL(wc.getURL());
+    if (current.hostname === 'chatgpt.com') {
+      const match = current.pathname.match(/^\/g\/([^/]+)/);
+      if (match) return current.origin + '/g/' + match[1];
+    }
+  } catch {}
+  return CHATGPT_URL;
+}
+
+async function freshAgentConversation(pane) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) throw new Error('pane_unavailable');
+  const target = projectRootForPane(pane);
+  if (wc.getURL() !== target) await wc.loadURL(target);
+  const ready = await waitForChatComposer(wc, 30000);
+  if (!ready) throw new Error('chat_composer_not_found');
+  return { ok: true, url: wc.getURL() };
+}
+
+async function waitForConversationUrl(pane, timeoutMs = 15000) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) return null;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const current = wc.getURL();
+    try {
+      const parsed = new URL(current);
+      if (parsed.hostname === 'chatgpt.com' && /\/c\/[^/]+/.test(parsed.pathname)) return current;
+    } catch {}
+    await sleep(250);
+  }
+  return wc.getURL();
+}
+
+async function waitForAssistantMarker(pane, marker, timeoutMs = 60000) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) return false;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (wc.isDestroyed()) return false;
+    const found = await wc.executeJavaScript(
+      "(() => [...document.querySelectorAll('[data-message-author-role=\\\"assistant\\\"]')]"
+      + ".some(node => String(node.innerText || node.textContent || '').includes("
+      + JSON.stringify(marker)
+      + ")))()",
+      true,
+    ).catch(() => false);
+    if (found) return true;
+    await sleep(500);
+  }
+  return false;
+}
+
+function createPaneAgentIdentityRuntime() {
+  const broker = {
+    listAgents: async () => {
+      const result = await runAgentSessionTool(['list']);
+      return Array.isArray(result?.agents) ? result.agents : [];
+    },
+    showSession: async (sessionId) => runAgentSessionTool([
+      'show',
+      '--session',
+      sessionId,
+    ]),
+    createSession: async ({ agentId, missionId, objective, surface }) => {
+      const args = ['create', '--agent', agentId, '--surface', surface || 'dual-browser-pane'];
+      if (missionId) args.push('--mission', missionId);
+      if (objective) args.push('--objective', objective);
+      return runAgentSessionTool(args);
+    },
+    markOpen: async (sessionId, chatUrl) => runAgentSessionTool([
+      'mark-open',
+      '--session',
+      sessionId,
+      ...(chatUrl ? ['--chat-url', chatUrl] : []),
+    ]),
+  };
+
+  const surface = {
+    getUrl: (pane) => {
+      const wc = getPane(pane);
+      return wc && !wc.isDestroyed() ? wc.getURL() : null;
+    },
+    freshConversation: freshAgentConversation,
+    sendMessage: async (pane, message) => {
+      if (!bridge) return { ok: false, error: 'bridge_unavailable' };
+      const result = await bridge.sendMessage(pane, message);
+      if (!result?.ok) return result;
+      const url = await waitForConversationUrl(pane);
+      return { ...result, url };
+    },
+    waitForAssistantMarker,
+  };
+
+  return new PaneAgentRuntime({
+    instanceId: instance.id,
+    missionId: PANE_AGENT_MISSION_ID,
+    broker,
+    surface,
+    loadState: loadPaneAgentState,
+    saveState: savePaneAgentState,
+  });
 }
 
 function publicAgentSession(record) {
@@ -760,6 +891,8 @@ function createWindow() {
   const captureDir = path.join(app.getPath('pictures'), 'MCF-Cockpit-Captures');
   const uploadDir = path.join(app.getPath('userData'), 'approved-uploads');
   mkdirSync(uploadDir, { recursive: true });
+
+  paneAgentRuntime = createPaneAgentIdentityRuntime();
   bridge = new LocalAgentBridge({
     getWorkspaceWebContents: activeWorkspaceWebContents,
     getPaneWebContents: getPane,
@@ -769,11 +902,36 @@ function createWindow() {
     captureWorkspace,
     openAgentSession,
     listAgentSessions,
+    getAgentIdentities: async () => paneAgentRuntime?.getIdentities() ?? [],
+    bootstrapAgentIdentities: async (input) => {
+      if (!paneAgentRuntime) return { ok: false, error: 'agent_identity_runtime_unavailable' };
+      return paneAgentRuntime.bootstrap(input ?? {});
+    },
+    dispatchAgentMission: async (input) => {
+      if (!paneAgentRuntime) return { ok: false, error: 'agent_identity_runtime_unavailable' };
+      return paneAgentRuntime.dispatchMission(input ?? {});
+    },
+    listAgentReceipts: async () => paneAgentRuntime?.listReceipts() ?? [],
     onEvent: emitBridgeEvent,
   });
 
   bridge.start()
-    .then((state) => persistBridgeState(state))
+    .then(async (state) => {
+      persistBridgeState(state);
+      await sleep(1200);
+      const bootstrap = await paneAgentRuntime?.bootstrap().catch((error) => ({
+        ok: false,
+        error: error.message,
+      }));
+      if (bootstrap?.ok) {
+        emitBridgeEvent({ level: 'ok', message: 'MCF Agent Identity: Emily e Sofia READY.' });
+      } else {
+        emitBridgeEvent({
+          level: 'error',
+          message: 'MCF Agent Identity: bootstrap incompleto — ' + (bootstrap?.error || 'verificar /v1/agents'),
+        });
+      }
+    })
     .catch((error) => {
       persistBridgeState(null);
       emitBridgeEvent({ level: 'error', message: 'Agent Bridge não iniciou: ' + error.message });
@@ -797,6 +955,7 @@ function createWindow() {
     const state = await bridge?.stop().catch(() => null);
     persistBridgeState(state);
     bridge = null;
+    paneAgentRuntime = null;
     chatView = null;
     workspaceView = null;
     workspaceAuxWindow = null;

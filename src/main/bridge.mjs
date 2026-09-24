@@ -117,6 +117,10 @@ export class LocalAgentBridge {
     captureWorkspace = null,
     openAgentSession = null,
     listAgentSessions = null,
+    getAgentIdentities = null,
+    bootstrapAgentIdentities = null,
+    dispatchAgentMission = null,
+    listAgentReceipts = null,
     onEvent = () => {},
   }) {
     this.getWorkspaceWebContents = getWorkspaceWebContents;
@@ -131,6 +135,10 @@ export class LocalAgentBridge {
     this.captureWorkspace = captureWorkspace;
     this.openAgentSession = openAgentSession;
     this.listAgentSessions = listAgentSessions;
+    this.getAgentIdentities = getAgentIdentities;
+    this.bootstrapAgentIdentities = bootstrapAgentIdentities;
+    this.dispatchAgentMission = dispatchAgentMission;
+    this.listAgentReceipts = listAgentReceipts;
     this.onEvent = onEvent;
     this.server = null;
     this.port = null;
@@ -213,6 +221,14 @@ export class LocalAgentBridge {
     return { ok: true, pane, wc };
   }
 
+  async sendMessage(target, message) {
+    const pane = normalizePaneTarget(target);
+    const normalizedMessage = messageInput({ message });
+    if (!pane) return { ok: false, error: 'valid_message_target_required' };
+    if (!normalizedMessage) return { ok: false, error: 'valid_message_required' };
+    return this.#sendMessage(pane, normalizedMessage);
+  }
+
   async #sendMessage(target, message) {
     const { pane, wc } = this.#paneWebContents(target);
     if (!pane) return { ok: false, error: 'invalid_message_target' };
@@ -222,34 +238,54 @@ export class LocalAgentBridge {
     }
 
     const prepared = await wc.executeJavaScript(`(async () => {
-      const enforceChatMode = ${pane === 'chat' ? 'true' : 'false'};
+      const enforceChatMode = true;
       const visible = (el) => {
         if (!el) return false;
         const r = el.getBoundingClientRect();
         const s = getComputedStyle(el);
         return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
       };
+      const findComposer = () => document.querySelector('#prompt-textarea')
+        || document.querySelector('textarea')
+        || [...document.querySelectorAll('[contenteditable="true"]')].find(visible);
+      const findModeButton = (label) => [...document.querySelectorAll('button[role="radio"]')]
+        .filter(visible)
+        .find(button => String(button.innerText || button.textContent || '').trim() === label);
 
       if (enforceChatMode) {
+        let chatMode = findModeButton('Chat');
+        let workMode = findModeButton('Work');
         const currentSend = document.querySelector('[data-testid="send-button"]');
-        const blocked = currentSend?.getAttribute('aria-disabled') === 'true';
-        if (blocked) {
-          const chatMode = [...document.querySelectorAll('button[role="radio"]')]
-            .filter(visible)
-            .find(button => String(button.innerText || button.textContent || '').trim() === 'Chat');
-          if (!chatMode) return { ok:false, error:'chat_mode_toggle_not_found' };
+        const composerBefore = findComposer();
+        const chatOn = chatMode?.getAttribute('data-state') === 'on'
+          || chatMode?.getAttribute('aria-checked') === 'true'
+          || chatMode?.getAttribute('aria-selected') === 'true';
+        const workOn = workMode?.getAttribute('data-state') === 'on'
+          || workMode?.getAttribute('aria-checked') === 'true'
+          || workMode?.getAttribute('aria-selected') === 'true';
+        const blocked = currentSend?.getAttribute('aria-disabled') === 'true'
+          || currentSend?.disabled === true;
+        const needsSwitch = Boolean(chatMode) && (!chatOn || workOn || !composerBefore || blocked);
+
+        if (needsSwitch) {
           chatMode.click();
           await new Promise(resolve => setTimeout(resolve, 900));
-          const refreshedSend = document.querySelector('[data-testid="send-button"]');
-          if (refreshedSend?.getAttribute('aria-disabled') === 'true') {
+          chatMode = findModeButton('Chat');
+          workMode = findModeButton('Work');
+          const refreshedComposer = findComposer();
+          const refreshedChatOn = chatMode?.getAttribute('data-state') === 'on'
+            || chatMode?.getAttribute('aria-checked') === 'true'
+            || chatMode?.getAttribute('aria-selected') === 'true';
+          const refreshedWorkOn = workMode?.getAttribute('data-state') === 'on'
+            || workMode?.getAttribute('aria-checked') === 'true'
+            || workMode?.getAttribute('aria-selected') === 'true';
+          if (!refreshedChatOn || refreshedWorkOn || !refreshedComposer) {
             return { ok:false, error:'chat_mode_switch_failed' };
           }
         }
       }
 
-      const composer = document.querySelector('#prompt-textarea')
-        || document.querySelector('textarea')
-        || [...document.querySelectorAll('[contenteditable="true"]')].find(visible);
+      const composer = findComposer();
       if (!composer) return { ok:false, error:'chat_composer_not_found' };
 
       const blockReason = (() => {
@@ -424,6 +460,40 @@ export class LocalAgentBridge {
           objective: objective || null,
         });
         return json(res, result?.ok ? 201 : 422, result ?? { ok: false, error: 'agent_session_open_failed' });
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/agents') {
+        if (typeof this.getAgentIdentities !== 'function') {
+          return json(res, 503, { ok: false, error: 'agent_identity_runtime_unavailable' });
+        }
+        const agents = await this.getAgentIdentities();
+        return json(res, 200, { ok: true, agents });
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/agents/bootstrap') {
+        if (typeof this.bootstrapAgentIdentities !== 'function') {
+          return json(res, 503, { ok: false, error: 'agent_identity_runtime_unavailable' });
+        }
+        const body = await readJson(req);
+        const result = await this.bootstrapAgentIdentities(body ?? {});
+        return json(res, result?.ok ? 200 : 422, result ?? { ok: false, error: 'agent_bootstrap_failed' });
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/mission-envelope') {
+        if (typeof this.dispatchAgentMission !== 'function') {
+          return json(res, 503, { ok: false, error: 'agent_identity_runtime_unavailable' });
+        }
+        const body = await readJson(req);
+        const result = await this.dispatchAgentMission(body ?? {});
+        return json(res, result?.ok ? 200 : 422, result ?? { ok: false, error: 'mission_dispatch_failed' });
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/agent-receipts') {
+        if (typeof this.listAgentReceipts !== 'function') {
+          return json(res, 503, { ok: false, error: 'agent_identity_runtime_unavailable' });
+        }
+        const receipts = await this.listAgentReceipts();
+        return json(res, 200, { ok: true, receipts });
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/v1/message') {

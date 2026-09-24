@@ -1,0 +1,40 @@
+{
+  "schema": "mcf-dual-agent-identity-smoke/v1",
+  "version": "0.4.3",
+  "appImageSha256": "6ef38312b97463dd54fabfeccd499d5bbdafca0073a94e00f39c4733d7603127",
+  "agents": {
+    "Emily": {
+      "pane": "chat",
+      "role": "Auditoria Independente",
+      "contractDigest": "9385ac2330d966133814c899540e9f33daad0f5eb423ec6a0a3e4a0bb48d70f4",
+      "state": "READY",
+      "handshakeVerified": true
+    },
+    "Sofia": {
+      "pane": "workspace",
+      "role": "Arquitetura de Software",
+      "contractDigest": "06ffc53d7466471b1541070990b02acde1a7350a63cb41b1b299f3ef0f28b6f3",
+      "state": "READY",
+      "handshakeVerified": true
+    }
+  },
+  "missions": {
+    "Sofia": {
+      "missionId": "MCF-DUAL-AGENT-IDENTITY-001-SOFIA-FINAL",
+      "queued": "fb7b7c44-2320-4485-8822-dd99d3c5b03c",
+      "delivered": "e9786fec-b3d3-4369-b9ff-a9eabe9f5758",
+      "accepted": "8a021cca-32af-450e-a3ae-1536e9de2cf6"
+    },
+    "Emily": {
+      "missionId": "MCF-DUAL-AGENT-IDENTITY-001-EMILY-FINAL",
+      "queued": "fe5e577f-75c8-4372-841f-f9ddedf7d652",
+      "delivered": "37b69dfc-b756-4df0-b7c6-b7b9efe0bb77",
+      "accepted": "c4f63967-e832-4511-b8fe-997b2d782fb3"
+    }
+  },
+  "claims": {
+    "identityBinding": true,
+    "missionRouting": true,
+    "cognitiveIndependence": false
+  }
+}

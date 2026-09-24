@@ -146,7 +146,7 @@ test('message API targets chat and workspace without system input and broadcasts
   assert.deepEqual(payload.targets.sort(), ['chat', 'workspace']);
   assert.deepEqual(inserted.chat, ['olá emilly', 'teste simultâneo']);
   assert.deepEqual(inserted.workspace, ['teste simultâneo']);
-  assert.ok(scripts.workspace.some(script => script.includes('const enforceChatMode = false')));
+  assert.ok(scripts.workspace.some(script => script.includes('const enforceChatMode = true')));
 
   assert.equal((await request('/v1/message', { pane: 'other', message: 'x' })).status, 400);
   assert.equal((await request('/v1/message', { pane: 'chat', message: '' })).status, 400);
@@ -258,4 +258,70 @@ test('browser automation routes target chat or workspace explicitly', async t =>
 
   assert.equal((await get('/v1/state?pane=other')).status, 400);
   assert.equal((await post('/v1/navigate', { pane: 'other', url: 'https://example.com/' })).status, 400);
+});
+
+
+test('identity runtime endpoints expose agents, bootstrap, missions and receipts', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-identity-api-'));
+  const calls = [];
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => ({
+      isDestroyed: () => false,
+      getURL: () => 'https://workspace.test/',
+      getTitle: () => 'workspace',
+      isLoading: () => false,
+      navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+    }),
+    captureDir: dir,
+    instanceId: 'test',
+    getAgentIdentities: async () => ([
+      { pane: 'chat', agentId: 'Emily', state: 'READY' },
+      { pane: 'workspace', agentId: 'Sofia', state: 'READY' },
+    ]),
+    bootstrapAgentIdentities: async input => {
+      calls.push(['bootstrap', input]);
+      return { ok: true, agents: ['Emily', 'Sofia'] };
+    },
+    dispatchAgentMission: async input => {
+      calls.push(['mission', input]);
+      return {
+        ok: true,
+        envelope: { envelopeId: 'env-1', agent: { agentId: input.agentId } },
+        receipt: { receiptId: 'receipt-1', status: 'DELIVERED' },
+      };
+    },
+    listAgentReceipts: async () => ([{ receiptId: 'receipt-1', status: 'DELIVERED' }]),
+  });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive: true }); });
+
+  const base = 'http://127.0.0.1:' + bridge.port;
+  const auth = { Authorization: 'Bearer ' + bridge.token };
+  const get = route => fetch(base + route, { headers: auth });
+  const post = (route, body) => fetch(base + route, {
+    method: 'POST',
+    headers: { ...auth, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const agents = await (await get('/v1/agents')).json();
+  assert.equal(agents.ok, true);
+  assert.equal(agents.agents.length, 2);
+  assert.equal(agents.agents[0].agentId, 'Emily');
+
+  const boot = await (await post('/v1/agents/bootstrap', { agentId: 'Emily' })).json();
+  assert.equal(boot.ok, true);
+  assert.deepEqual(calls[0], ['bootstrap', { agentId: 'Emily' }]);
+
+  const mission = await (await post('/v1/mission-envelope', {
+    agentId: 'Sofia',
+    missionId: 'MISSION-1',
+    objective: 'Definir uma fronteira.',
+  })).json();
+  assert.equal(mission.ok, true);
+  assert.equal(mission.envelope.agent.agentId, 'Sofia');
+
+  const receipts = await (await get('/v1/agent-receipts')).json();
+  assert.equal(receipts.ok, true);
+  assert.equal(receipts.receipts[0].receiptId, 'receipt-1');
 });
