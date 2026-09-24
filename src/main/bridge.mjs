@@ -761,7 +761,13 @@ export class LocalAgentBridge {
         }
         const body = await readJson(req);
         const result = await this.bootstrapAgentIdentities(body ?? {});
-        return json(res, result?.ok ? 200 : 422, result ?? { ok: false, error: 'agent_bootstrap_failed' });
+        const recoveryBlocked = Array.isArray(result?.agents)
+          && result.agents.some(item => item?.error === 'pane_recovery_required');
+        return json(
+          res,
+          result?.ok ? 200 : recoveryBlocked ? 409 : 422,
+          result ?? { ok: false, error: 'agent_bootstrap_failed' },
+        );
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/v1/mission-envelope') {
