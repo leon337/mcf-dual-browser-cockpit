@@ -1809,3 +1809,40 @@ test('runtime fails closed when persisted bindings belong to another agent profi
     saveState: () => {},
   }), /agent_binding_profile_mismatch/);
 });
+
+
+test('identity bootstrap recovers message_send_unconfirmed when the exact ready marker is observed', async () => {
+  const bindings = agentBindingsForProfile('debug-engineering');
+  let persisted = null;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async () => sessionFor('Rafael'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: () => 'https://chatgpt.test/c/rafael',
+    freshConversation: async () => {},
+    sendMessage: async () => ({ ok: false, error: 'message_send_unconfirmed' }),
+    waitForAssistantMarker: async (_pane, marker) => marker.includes('agent_id=Rafael'),
+  };
+
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook-team2',
+    missionId: 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003',
+    broker,
+    surface,
+    agentBindings: bindings,
+    loadState: () => null,
+    saveState: state => { persisted = structuredClone(state); },
+  });
+
+  const result = await runtime.bootstrap({ agentId: 'Rafael' });
+  assert.equal(result.ok, true);
+  assert.equal(persisted.bindings.workspace.state, 'READY');
+  assert.equal(persisted.bindings.workspace.handshakeVerified, true);
+  const kinds = runtime.listReceipts().map(receipt => receipt.kind);
+  assert.ok(kinds.includes('IDENTITY_BOOTSTRAP_DELIVERY_RECOVERED'));
+  assert.ok(kinds.includes('HANDSHAKE_VERIFIED'));
+  assert.equal(kinds.includes('IDENTITY_BOOTSTRAP_DELIVERY_FAILED'), false);
+});

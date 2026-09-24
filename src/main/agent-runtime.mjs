@@ -317,38 +317,65 @@ export class PaneAgentRuntime {
     }
 
     const bootstrap = buildIdentityBootstrap({ binding, session });
+    const marker = 'MCF_AGENT_READY agent_id=' + binding.agentId + ' session_id=' + session.sessionId;
     const delivery = await this.surface.sendMessage(pane, bootstrap);
+    let verifiedFromRecoveredDelivery = false;
+
     if (!delivery?.ok) {
-      const failed = this.state.bindings[pane];
-      failed.state = 'ERROR';
-      failed.lastError = delivery?.error ?? 'identity_bootstrap_delivery_failed';
-      failed.updatedAt = this.now();
+      const deliveryError = delivery?.error ?? 'identity_bootstrap_delivery_failed';
+      if (deliveryError === 'message_send_unconfirmed') {
+        const markerObserved = await this.surface.waitForAssistantMarker(pane, marker);
+        if (markerObserved) {
+          verifiedFromRecoveredDelivery = true;
+          this.#record(createAgentReceipt({
+            kind: 'IDENTITY_BOOTSTRAP_DELIVERY_RECOVERED',
+            status: 'DELIVERED',
+            binding,
+            session,
+            evidence: {
+              pane,
+              error: deliveryError,
+              marker,
+              markerObserved: true,
+              url: this.surface.getUrl(pane) ?? null,
+            },
+            now: this.now(),
+          }));
+        }
+      }
+
+      if (!verifiedFromRecoveredDelivery) {
+        const failed = this.state.bindings[pane];
+        failed.state = 'ERROR';
+        failed.lastError = deliveryError;
+        failed.updatedAt = this.now();
+        this.#record(createAgentReceipt({
+          kind: 'IDENTITY_BOOTSTRAP_DELIVERY_FAILED',
+          status: 'FAILED',
+          binding,
+          session,
+          evidence: { error: failed.lastError, pane },
+          now: this.now(),
+        }));
+        return { ok: false, error: failed.lastError, identity: clone(failed) };
+      }
+    } else {
       this.#record(createAgentReceipt({
-        kind: 'IDENTITY_BOOTSTRAP_DELIVERY_FAILED',
-        status: 'FAILED',
+        kind: 'IDENTITY_BOOTSTRAP_DELIVERED',
+        status: 'DELIVERED',
         binding,
         session,
-        evidence: { error: failed.lastError, pane },
+        evidence: {
+          pane,
+          url: delivery.url ?? this.surface.getUrl(pane) ?? null,
+          method: delivery.method ?? null,
+        },
         now: this.now(),
       }));
-      return { ok: false, error: failed.lastError, identity: clone(failed) };
     }
 
-    this.#record(createAgentReceipt({
-      kind: 'IDENTITY_BOOTSTRAP_DELIVERED',
-      status: 'DELIVERED',
-      binding,
-      session,
-      evidence: {
-        pane,
-        url: delivery.url ?? this.surface.getUrl(pane) ?? null,
-        method: delivery.method ?? null,
-      },
-      now: this.now(),
-    }));
-
-    const marker = 'MCF_AGENT_READY agent_id=' + binding.agentId + ' session_id=' + session.sessionId;
-    const verified = await this.surface.waitForAssistantMarker(pane, marker);
+    const verified = verifiedFromRecoveredDelivery
+      || await this.surface.waitForAssistantMarker(pane, marker);
 
     const record = this.state.bindings[pane];
     record.chatUrl = delivery.url ?? this.surface.getUrl(pane) ?? null;
