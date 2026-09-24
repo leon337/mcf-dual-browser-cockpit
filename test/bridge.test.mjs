@@ -70,3 +70,87 @@ test('HTTP bridge security and concurrency', async t => {
   assert.ok(!JSON.stringify(page).includes('DO_NOT_LEAK'));
   const oldToken = bridge.token; await bridge.stop(); await bridge.start(0); assert.notEqual(oldToken, bridge.token);
 });
+
+
+test('message API targets chat and workspace without system input and broadcasts concurrently', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-message-'));
+  let entrants = 0;
+  const inserted = { chat: [], workspace: [] };
+
+  function fakeWebContents(pane) {
+    return {
+      isDestroyed: () => false,
+      getURL: () => 'https://chatgpt.com/',
+      getTitle: () => pane,
+      isLoading: () => false,
+      navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+      executeJavaScript: async () => ({ ok: true, sent: true }),
+      insertText: async value => {
+        inserted[pane].push(value);
+      },
+    };
+  }
+
+  const panes = {
+    chat: fakeWebContents('chat'),
+    workspace: fakeWebContents('workspace'),
+  };
+
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => panes.workspace,
+    getPaneWebContents: pane => panes[pane] ?? null,
+    captureDir: dir,
+    instanceId: 'test',
+  });
+  await bridge.start(0);
+  t.after(async () => { await bridge.stop(); rmSync(dir, { recursive: true }); });
+
+  const url = 'http://127.0.0.1:' + bridge.port;
+  const request = (route, body) => fetch(url + route, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + bridge.token,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const single = await request('/v1/message', { pane: 'chat', message: 'olá emilly' });
+  assert.equal(single.status, 200);
+  assert.deepEqual(inserted.chat, ['olá emilly']);
+
+  entrants = 0;
+  let releaseBroadcast;
+  const broadcastGate = new Promise(resolve => { releaseBroadcast = resolve; });
+  for (const pane of Object.values(panes)) {
+    pane.insertText = async value => {
+      entrants += 1;
+      if (entrants === 2) releaseBroadcast();
+      await Promise.race([
+        broadcastGate,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('broadcast_not_parallel')), 250)),
+      ]);
+      inserted[pane.getTitle()].push(value);
+    };
+  }
+
+  const broadcast = await request('/v1/messages/broadcast', {
+    targets: ['chat', 'workspace'],
+    message: 'teste simultâneo',
+  });
+  assert.equal(broadcast.status, 200);
+  const payload = await broadcast.json();
+  assert.equal(payload.ok, true);
+  assert.deepEqual(payload.targets.sort(), ['chat', 'workspace']);
+  assert.deepEqual(inserted.chat, ['olá emilly', 'teste simultâneo']);
+  assert.deepEqual(inserted.workspace, ['teste simultâneo']);
+
+  assert.equal((await request('/v1/message', { pane: 'other', message: 'x' })).status, 400);
+  assert.equal((await request('/v1/message', { pane: 'chat', message: '' })).status, 400);
+
+  const beforeBlocked = inserted.chat.length;
+  panes.chat.executeJavaScript = async () => ({ ok: false, error: 'rate_limit_hard_block' });
+  const blocked = await request('/v1/message', { pane: 'chat', message: 'não deve inserir' });
+  assert.equal(blocked.status, 429);
+  assert.equal(inserted.chat.length, beforeBlocked);
+});

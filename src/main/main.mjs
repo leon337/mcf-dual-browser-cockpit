@@ -762,6 +762,7 @@ function createWindow() {
   mkdirSync(uploadDir, { recursive: true });
   bridge = new LocalAgentBridge({
     getWorkspaceWebContents: activeWorkspaceWebContents,
+    getPaneWebContents: getPane,
     captureDir,
     instanceId: instance.id,
     uploadDir,

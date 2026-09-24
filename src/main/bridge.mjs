@@ -4,6 +4,21 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 const MAX_BODY = 1024 * 1024;
+const MAX_MESSAGE = 16000;
+
+function normalizePaneTarget(value) {
+  const key = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (['chat', 'emilly', 'emily'].includes(key)) return 'chat';
+  if (['workspace', 'sophia', 'sofia'].includes(key)) return 'workspace';
+  return null;
+}
+
+function messageInput(body) {
+  const message = typeof body?.message === 'string' ? body.message.trim() : '';
+  if (!message || message.length > MAX_MESSAGE) return null;
+  return message;
+}
+
 
 function json(res, status, payload) {
   const body = JSON.stringify(payload);
@@ -95,6 +110,7 @@ function pageSelectorScript() {
 export class LocalAgentBridge {
   constructor({
     getWorkspaceWebContents,
+    getPaneWebContents = null,
     captureDir,
     instanceId = 'principal',
     uploadDir = null,
@@ -104,6 +120,9 @@ export class LocalAgentBridge {
     onEvent = () => {},
   }) {
     this.getWorkspaceWebContents = getWorkspaceWebContents;
+    this.getPaneWebContents = typeof getPaneWebContents === 'function'
+      ? getPaneWebContents
+      : (pane) => pane === 'workspace' ? this.getWorkspaceWebContents?.() : null;
     this.captureDir = captureDir;
     this.instanceId = instanceId;
     this.paused = false;
@@ -177,6 +196,147 @@ export class LocalAgentBridge {
     return this.server ? this.stop() : this.start();
   }
 
+  #paneWebContents(target) {
+    const pane = normalizePaneTarget(target);
+    if (!pane) return { pane: null, wc: null };
+    const wc = this.getPaneWebContents?.(pane) ?? null;
+    if (!wc || wc.isDestroyed?.()) return { pane, wc: null };
+    return { pane, wc };
+  }
+
+  async #sendMessage(target, message) {
+    const { pane, wc } = this.#paneWebContents(target);
+    if (!pane) return { ok: false, error: 'invalid_message_target' };
+    if (!wc) return { ok: false, pane, error: 'message_target_unavailable' };
+    if (typeof wc.executeJavaScript !== 'function' || typeof wc.insertText !== 'function') {
+      return { ok: false, pane, error: 'message_transport_unavailable' };
+    }
+
+    const prepared = await wc.executeJavaScript(`(() => {
+      const visible = (el) => {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
+      };
+      const composer = document.querySelector('#prompt-textarea')
+        || document.querySelector('textarea')
+        || [...document.querySelectorAll('[contenteditable="true"]')].find(visible);
+      if (!composer) return { ok:false, error:'chat_composer_not_found' };
+
+      const blockReason = (() => {
+        let node = composer;
+        while (node) {
+          const fiberKey = Object.keys(node).find(key => key.startsWith('__reactFiber$'));
+          if (fiberKey) {
+            let fiber = node[fiberKey];
+            let depth = 0;
+            while (fiber && depth < 35) {
+              const props = fiber.memoizedProps;
+              const reason = props?.disableReason ?? props?.disabledReason;
+              if (typeof reason === 'string' && reason) return reason;
+              fiber = fiber.return;
+              depth += 1;
+            }
+          }
+          node = node.parentElement;
+        }
+        return null;
+      })();
+      if (blockReason === 'rate_limit_hard_block') return { ok:false, error:blockReason };
+
+      composer.focus();
+      if (composer.isContentEditable) {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(composer);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        try { document.execCommand('delete', false); } catch {}
+        if ((composer.innerText || '').trim()) composer.textContent = '';
+      } else if ('value' in composer) {
+        const proto = Object.getPrototypeOf(composer);
+        const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (descriptor?.set) descriptor.set.call(composer, '');
+        else composer.value = '';
+        composer.dispatchEvent(new InputEvent('input', {
+          bubbles: true,
+          inputType: 'deleteContentBackward',
+          data: null,
+        }));
+      } else {
+        return { ok:false, error:'chat_composer_not_editable' };
+      }
+      return { ok:true };
+    })()`, true);
+
+    if (!prepared?.ok) return { ok: false, pane, error: prepared?.error || 'message_prepare_failed' };
+
+    await wc.insertText(message);
+    await new Promise(resolve => setTimeout(resolve, 120));
+
+    const sent = await wc.executeJavaScript(`(() => {
+      const visible = (el) => {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        return r.width > 10 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
+      };
+      const direct = document.querySelector('[data-testid="send-button"]');
+      const buttons = [...document.querySelectorAll('button')].filter(visible);
+      const send = direct || buttons.find((button) => {
+        const label = String(button.getAttribute('aria-label') || button.title || button.innerText || '').toLowerCase();
+        return (label.includes('send') || label.includes('enviar')) && !button.disabled;
+      });
+      if (send && !send.disabled) {
+        send.click();
+        return { ok:true, method:'button' };
+      }
+      const composer = document.querySelector('#prompt-textarea')
+        || document.querySelector('textarea')
+        || [...document.querySelectorAll('[contenteditable="true"]')].find(visible);
+      const form = composer?.closest('form');
+      if (form?.requestSubmit) {
+        form.requestSubmit();
+        return { ok:true, method:'form' };
+      }
+      return { ok:false, error:'chat_send_control_not_found' };
+    })()`, true);
+
+    if (!sent?.ok) return { ok: false, pane, error: sent?.error || 'message_send_failed' };
+
+    let verification = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 150));
+      verification = await wc.executeJavaScript(`(() => {
+        const composer = document.querySelector('#prompt-textarea')
+          || document.querySelector('textarea')
+          || document.querySelector('[contenteditable="true"]');
+        const text = composer ? String(composer.innerText || composer.value || '').trim() : '';
+        return { ok:true, sent: !composer || text.length === 0, url: location.href };
+      })()`, true).catch(() => null);
+      if (verification?.sent) break;
+    }
+
+    if (!verification?.sent) {
+      return {
+        ok: false,
+        pane,
+        error: 'message_send_unconfirmed',
+        method: sent.method ?? null,
+      };
+    }
+
+    this.onEvent({ level: 'ok', message: 'Bridge enviou mensagem para ' + pane + '.' });
+    return {
+      ok: true,
+      pane,
+      method: sent.method ?? null,
+      url: typeof wc.getURL === 'function' ? wc.getURL() : null,
+      title: typeof wc.getTitle === 'function' ? wc.getTitle() : null,
+    };
+  }
+
   async #handle(req, res) {
     let acquired = false;
     try {
@@ -236,6 +396,31 @@ export class LocalAgentBridge {
           objective: objective || null,
         });
         return json(res, result?.ok ? 201 : 422, result ?? { ok: false, error: 'agent_session_open_failed' });
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/message') {
+        const body = await readJson(req);
+        const pane = normalizePaneTarget(body?.pane);
+        const message = messageInput(body);
+        if (!pane) return json(res, 400, { ok: false, error: 'valid_message_target_required' });
+        if (!message) return json(res, 400, { ok: false, error: 'valid_message_required' });
+        const result = await this.#sendMessage(pane, message);
+        const status = result.ok ? 200 : result.error === 'rate_limit_hard_block' ? 429 : 422;
+        return json(res, status, result);
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/messages/broadcast') {
+        const body = await readJson(req);
+        const message = messageInput(body);
+        const rawTargets = Array.isArray(body?.targets) ? body.targets : ['chat', 'workspace'];
+        const targets = [...new Set(rawTargets.map(normalizePaneTarget).filter(Boolean))];
+        if (!message) return json(res, 400, { ok: false, error: 'valid_message_required' });
+        if (!targets.length || targets.length !== rawTargets.length) {
+          return json(res, 400, { ok: false, error: 'valid_message_targets_required' });
+        }
+        const results = await Promise.all(targets.map(target => this.#sendMessage(target, message)));
+        const ok = results.every(result => result.ok);
+        return json(res, ok ? 200 : 422, { ok, targets, results });
       }
 
       const wc = this.getWorkspaceWebContents();
