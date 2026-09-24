@@ -1,0 +1,93 @@
+{
+  "parentMissionId": "MCF-AGENT-LIFECYCLE-002-VISUAL-FINAL-0.5.11-R1",
+  "missions": {
+    "Sofia": {
+      "envelopeId": "d187abea-041c-4daa-b2af-7913c7a7fd45",
+      "missionId": "MCF-AGENT-LIFECYCLE-002-SOFIA-VISUAL-FINAL-0.5.11-R1",
+      "state": "COMPLETED",
+      "delivery": {
+        "userMessageId": "73ca0105-5c34-4cf3-9328-0257588cce7b",
+        "baselineAssistantMessageId": "6c4a40b1-f92d-498c-a9b4-9d0aa84c4300",
+        "url": "https://chatgpt.com/g/g-p-6ab4a8a7448881918c12953ee47ad080-sophia/c/6ab4c062-ad7c-83e9-ac2b-23a256bd521c"
+      },
+      "acceptedAssistantStartMessageId": "request-placeholder-request-6ab4c062-ad7c-83e9-ac2b-23a256bd521c-0",
+      "acceptedAssistantMessageId": "dbf145f5-c7b8-40aa-bc9e-6536b14c59e7",
+      "assistantMessageIdMigratedFrom": "request-placeholder-request-6ab4c062-ad7c-83e9-ac2b-23a256bd521c-0",
+      "result": {
+        "assistantMessageId": "dbf145f5-c7b8-40aa-bc9e-6536b14c59e7",
+        "acceptedAssistantMessageId": "dbf145f5-c7b8-40aa-bc9e-6536b14c59e7",
+        "linkedUserMessageId": "73ca0105-5c34-4cf3-9328-0257588cce7b",
+        "conversationId": "6ab4c062-ad7c-83e9-ac2b-23a256bd521c",
+        "resultSha256": "e4e9b8491235348e83c74fce481b36558a3c14232b996437c8b3ba95ba298906",
+        "computedSha256": "e4e9b8491235348e83c74fce481b36558a3c14232b996437c8b3ba95ba298906",
+        "shaMatches": true,
+        "terminalProof": {
+          "generationFinished": true,
+          "terminalSignal": "ui_generation_inactive_with_final_actions",
+          "generationActive": false,
+          "stableForMs": 1234,
+          "finalActionsObserved": true
+        },
+        "textLength": 4793,
+        "startsWithPlaceholder": false,
+        "transientOnly": false,
+        "containsInterruptionStatus": true
+      },
+      "receiptKinds": [
+        "MISSION_QUEUED",
+        "MISSION_DELIVERED",
+        "MISSION_ACCEPTED",
+        "MISSION_WORKING",
+        "MISSION_RESULT_CAPTURED",
+        "MISSION_COMPLETED"
+      ]
+    },
+    "Emily": {
+      "envelopeId": "e9bd40d4-d228-4406-8fac-fd114df7dc16",
+      "missionId": "MCF-AGENT-LIFECYCLE-002-EMILY-VISUAL-FINAL-0.5.11-R1",
+      "state": "COMPLETED",
+      "delivery": {
+        "userMessageId": "cd9867df-b622-45f9-a13a-5e0b74d2ea13",
+        "baselineAssistantMessageId": "3b3fa64c-d2a9-4dab-b011-a0a61f8000b2",
+        "url": "https://chatgpt.com/g/g-p-6ab4a8c273288191a6ddacbaff2b2a1e-emilly/c/6ab4c08e-3a40-83e9-bfeb-ac89cf21dfbc"
+      },
+      "acceptedAssistantStartMessageId": "request-placeholder-request-6ab4c08e-3a40-83e9-bfeb-ac89cf21dfbc-2",
+      "acceptedAssistantMessageId": "534e372f-4e26-4dae-ae89-02952dff0e03",
+      "assistantMessageIdMigratedFrom": "request-placeholder-request-6ab4c08e-3a40-83e9-bfeb-ac89cf21dfbc-2",
+      "result": {
+        "assistantMessageId": "534e372f-4e26-4dae-ae89-02952dff0e03",
+        "acceptedAssistantMessageId": "534e372f-4e26-4dae-ae89-02952dff0e03",
+        "linkedUserMessageId": "cd9867df-b622-45f9-a13a-5e0b74d2ea13",
+        "conversationId": "6ab4c08e-3a40-83e9-bfeb-ac89cf21dfbc",
+        "resultSha256": "e3b7103e0c5a55370429dbd82e60ac00aa8c86b3b04693bf1f81fe642aa06388",
+        "computedSha256": "e3b7103e0c5a55370429dbd82e60ac00aa8c86b3b04693bf1f81fe642aa06388",
+        "shaMatches": true,
+        "terminalProof": {
+          "generationFinished": true,
+          "terminalSignal": "ui_generation_inactive_with_final_actions",
+          "generationActive": false,
+          "stableForMs": 1363,
+          "finalActionsObserved": true
+        },
+        "textLength": 4013,
+        "startsWithPlaceholder": false,
+        "transientOnly": false,
+        "containsInterruptionStatus": true
+      },
+      "receiptKinds": [
+        "MISSION_QUEUED",
+        "MISSION_DELIVERED",
+        "MISSION_ACCEPTED",
+        "MISSION_WORKING",
+        "MISSION_RESULT_CAPTURED",
+        "MISSION_COMPLETED"
+      ]
+    }
+  },
+  "parent": {
+    "required": 2,
+    "completed": 2,
+    "active": 0,
+    "closable": true
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "schema": "mcf-agent-lifecycle-closeout-evidence/v1",
+  "version": "0.5.13",
+  "commit": "c0a0517fa8b78f731c41a8a55c44942a5612156b",
+  "appImageSha256": "47d76980fc6dfa5c22a3ac2f870d1a5354867f78275053a1e8867cf22b2b7702",
+  "parentMissionId": "MCF-AGENT-LIFECYCLE-002-FINAL-0.5.13",
+  "parentStatus": {
+    "required": 2,
+    "completed": 2,
+    "active": 0,
+    "attempts": 2,
+    "closable": true,
+    "blockers": []
+  },
+  "missions": [
+    {
+      "missionId": "MCF-AGENT-LIFECYCLE-002-SOFIA-FINAL-0.5.13",
+      "agentId": "Sofia",
+      "state": "COMPLETED",
+      "envelopeId": "0f3cc9d3-3842-4078-82a9-401baf50dd8b",
+      "acceptedAssistantStartMessageId": "request-placeholder-request-6ab4c062-ad7c-83e9-ac2b-23a256bd521c-0",
+      "acceptedAssistantMessageId": "23bc29db-64d8-471a-b5ec-91babc2858b9",
+      "linkedUserMessageId": "0b095ec8-9de5-4a71-9962-4f9acd7eddcc",
+      "resultSha256": "2aaa3111cf5c3b5191912af423c6e0b18c93b141b88d0e46a95b295de30f666d",
+      "terminalProof": {
+        "generationFinished": true,
+        "terminalSignal": "ui_generation_inactive_with_final_actions",
+        "generationActive": false,
+        "stableForMs": 1330,
+        "finalActionsObserved": true
+      },
+      "textLength": 1646
+    },
+    {
+      "missionId": "MCF-AGENT-LIFECYCLE-002-EMILY-FINAL-0.5.13",
+      "agentId": "Emily",
+      "state": "COMPLETED",
+      "envelopeId": "5c9bca3e-7441-40d9-9697-33a91790109f",
+      "acceptedAssistantStartMessageId": "request-placeholder-request-6ab4c08e-3a40-83e9-bfeb-ac89cf21dfbc-0",
+      "acceptedAssistantMessageId": "a1d9d94e-1919-4c4f-9c65-a0c5e57db9d9",
+      "linkedUserMessageId": "17b252ff-08d1-4642-b923-1a8c089ad6c0",
+      "resultSha256": "f4f2f44dcbe195c6c61994c51310615bb8fa0e68fd3299599033b7597b82d3df",
+      "terminalProof": {
+        "generationFinished": true,
+        "terminalSignal": "ui_generation_inactive_with_final_actions",
+        "generationActive": false,
+        "stableForMs": 1385,
+        "finalActionsObserved": true
+      },
+      "textLength": 1913
+    }
+  ],
+  "visualEvidence": {
+    "00-pre-smoke-0.5.9.png": "f5eb7b215d8c123a528eca961c929bb01e3331da5ea2342de2dbac05d13c2a98",
+    "01-app-foreground-0.5.9.png": "eadd7686564e5aa614229023753efab19e89b9803ff45385003f3ec0fff17556",
+    "02-pre-smoke-0.5.10.png": "39039fae116967782b0ca0a1226b0b1128da76b3fa57b55fe2483942e60b7f50",
+    "03-working-0.5.10.png": "6dca5fce59265813e54533bb95a0805896641c67ff97ab4c462c589bbddabbb7",
+    "04-pre-smoke-0.5.11.png": "3be9f31656b0e16d1f8925255c579cb54c4b681d8003068dce6af21055d0da22",
+    "05-intermediate-0.5.11.png": "5becb35ddb88280bf865116f5a08e20e9877fa9475ddd78b87dd695e2ba5cb32",
+    "06-final-0.5.11.png": "3421b5bf183014aef64161ed6ce911baac086a02401fda078df249c8e6cecf19",
+    "08-final-working-0.5.13.png": "e487f8c28db5bfe65da4a23facb73e569183b0a00506ccd147e734b858891426",
+    "09-final-mid-0.5.13.png": "fbfc66f34cf2c8b72d69f6517a91b5a5cd18dcbe3f080884b3d14aa999202edd",
+    "10-final-completed-0.5.13.png": "f137da6d32209f7f7fb5eb325f6b2412756348f438e14862c8c27fa692c5721d",
+    "11-retry-working-0.5.12.png": "e65ff6e1239819fa8b12b08b7306525686941bdcdfc4b0edc6e49b88dcecef58",
+    "12-retry-completed-0.5.12.png": "c3a6c148b8c25bb70483f9ac6a0aebd210068f98fe4543c97d9bc87777393b8b",
+    "13-emily-final-audit-pass-0.5.12.png": "50212e4600c225e38ce6bcefa6bbc0831227506f5b2f24e039f90be4b523761c"
+  }
+}

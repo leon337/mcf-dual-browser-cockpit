@@ -1,0 +1,17 @@
+{
+  "hitWorking": true,
+  "timeline": [
+    {
+      "t": 0.01,
+      "states": {
+        "Sofia": "WORKING",
+        "Emily": "QUEUED"
+      },
+      "parent": {
+        "closable": false,
+        "active": 4,
+        "completed": 0
+      }
+    }
+  ]
+}
