@@ -1,6 +1,20 @@
-MCF-LIVE-AGENT-COMMS-001 validation
-version=0.6.0
+MCF-LIVE-AGENT-COMMS-001
+PHASE-01 local validation
 
+npm run check: PASS
+npm test: 55/55 PASS
+git diff --check: PASS
 
-> mcf-dual-browser-cockpit@0.6.0 check
-> node --check src/main/main.mjs && node --check src/main/bridge.mjs && node --check src/main/agent-runtime.mjs && node --check src/main/generation-control.mjs && node --check src/main/live-agent-events.mjs && node --check src/renderer/renderer.js && node --check src/preload/preload.cjs
+Coverage added:
+- bounded live event replay;
+- boot cursor reset;
+- authenticated instance-scoped snapshot;
+- two-Bridge isolation;
+- SSE replay after cursor;
+- conversation-change fail-closed and pane queue release;
+- persistent anchor loss fail-closed and pane queue release;
+- later user turn does not block prior terminal assistant turn;
+- RESULT_CAPTURED does not expose unverified result body;
+- COMPLETED exposes verified result body.
+
+Final CI/build/smoke: PENDING_RELEASE_SHA

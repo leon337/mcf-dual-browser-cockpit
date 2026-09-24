@@ -1,14 +1,10 @@
-# PHASE-01 — Decisions
+# PHASE-01 Decisions
 
 1. LEANDRO authorized continuous implementation, finalization and production deployment for this mission.
-2. PR #6 remains outside this mission and must not be merged by inference.
-3. Baseline is PR #7 head 6fcc47c4b64f6f5d8b93f09b96d8f98947c9fdb8.
-4. Runtime persistence remains the source of truth; SSE is transport/observability only.
-5. Live transport is GET-only, authenticated, loopback-only and instance-scoped.
-6. Cursor is bootId:sequence; replay gaps are explicit.
-7. Heartbeats do not advance the replay cursor.
-8. Mission state is persisted before event publication.
-9. RESULT_CAPTURED may be observed, but result body is exposed live only at COMPLETED after read-back validation.
-10. Conversation change during result observation fails closed as UNVERIFIED and releases the pane queue.
-11. A later user turn prevents a global generation control from blocking terminality of an earlier completed assistant turn.
-12. MESTRE multiplexes two independent instance streams; no cross-instance broker is introduced.
+2. Baseline chosen: Cockpit PR #7 head 6fcc47c...; PR #6 remains outside merge boundary.
+3. Sofia: SSE must not become a second state machine; persist before publish; replay uses boot epoch.
+4. Emily: no live terminal claim while generation active; replay gaps must be explicit; four-agent smoke required.
+5. Patrícia: external polling delay alone is not result loss; navigation/DOM anchor loss can create a livelock and must be bounded.
+6. Rafael: journal must sit between runtime and transport; subscribers cannot block runtime.
+7. MESTRE: use bootId:sequence, bounded journal, exact instance header, read-only SSE, verified result body only at COMPLETED.
+8. MESTRE: conversation/anchor loss becomes UNVERIFIED, not infinite WORKING.

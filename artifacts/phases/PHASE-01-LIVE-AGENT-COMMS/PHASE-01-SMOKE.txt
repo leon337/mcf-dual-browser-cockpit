@@ -1,1 +1,11 @@
-PENDING_EXACT_SHA_BUILD_AND_REAL_FOUR_AGENT_SMOKE
+Real four-agent live-channel smoke: PENDING_RELEASE_BUILD
+
+Required:
+1. run the same qualified AppImage in notebook and notebook-team2;
+2. open one authenticated SSE stream per instance;
+3. dispatch Emily, Sofia, Patrícia and Rafael;
+4. observe lifecycle events without pane polling;
+5. disconnect/reconnect one stream with Last-Event-ID and prove replay;
+6. verify no cross-instance events;
+7. compare COMPLETED event result IDs/hash/text with /v1/mission-result;
+8. capture visible final screenshots from both Cockpit windows.

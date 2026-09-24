@@ -1,44 +1,39 @@
-# PHASE-01 — LIVE AGENT COMMS
+# PHASE-01 — Live Agent Communications
 
 Mission: MCF-LIVE-AGENT-COMMS-001
 Class: C
-Authority: LEANDRO
+Human authority: LEANDRO
 Orchestrator: MESTRE
-Baseline: PR #7 / 0.5.18 / 6fcc47c4b64f6f5d8b93f09b96d8f98947c9fdb8
+Issue: MCF #360
+Technical baseline: Cockpit PR #7 / 6fcc47c4b64f6f5d8b93f09b96d8f98947c9fdb8
 
 ## Objective
-
-Materialize a continuous, authenticated and verifiable live channel between MESTRE and the four browser agents without replacing the existing mission lifecycle.
+Provide a live, authenticated, read-only channel from the two local Cockpit instances to MESTRE so agent lifecycle events and final results can be observed without manual polling of each pane.
 
 ## Scope
-
-- per-instance semantic event journal;
-- read-only SSE transport;
-- bounded replay with boot-aware cursor;
-- heartbeat and disconnect cleanup;
-- instance isolation;
+- instance-local semantic event journal;
+- authenticated SSE and snapshot endpoints;
+- bounded replay with bootId:sequence;
+- heartbeat and disconnect handling;
 - mission/result correlation;
-- terminal result exposed only after persisted read-back;
-- fail-closed conversation-change handling;
-- tests, build, real four-agent smoke, audit and local production deployment.
+- no terminal result body before verified COMPLETED;
+- fail-closed conversation/anchor loss;
+- cross-instance isolation;
+- tests, real four-agent smoke, AppImage and local production deployment.
 
-## Agents
+## Out of scope
+- merging PR #6;
+- changing MCF authority;
+- claiming cognitive independence;
+- remote/public exposure of the Bridge;
+- browser-token query parameters.
 
-- Sofia — architecture and invariants.
-- Rafael — engineering integration and operational design.
+## Selected agents
+- Sofia — architecture and stream/replay contract.
+- Rafael — engineering integration and backpressure/test plan.
 - Patrícia — failure/race analysis.
 - Emily — independent audit criteria and final re-audit.
-- MESTRE — implementation, integration, validation and release.
+- MESTRE — integration, implementation, validation, release and deployment.
 
 ## Acceptance
-
-- no external polling required to discover agent completion;
-- four real agents observed through two instance-local streams;
-- replay/reconnect explicit and deduplicable;
-- no cross-instance event leakage;
-- no false terminal while generation is active;
-- conversation change cannot livelock a pane;
-- runtime, stream, DOM/WebContents and visual evidence converge;
-- check/tests/CI/build green on exact SHA;
-- final AppImage deployed to notebook and notebook-team2;
-- Emily final audit has no Critical/High blocker.
+See Issue #360. Release requires green local checks, green CI, exact release SHA, AppImage SHA-256, two live instances, four-agent SSE smoke, replay evidence, runtime/stream/UI coherence, and Emily final audit without Critical/High blockers.

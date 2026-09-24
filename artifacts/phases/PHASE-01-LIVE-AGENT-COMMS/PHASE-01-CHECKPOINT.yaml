@@ -1,18 +1,21 @@
 mission_id: MCF-LIVE-AGENT-COMMS-001
 phase_id: PHASE-01-LIVE-AGENT-COMMS
-state: IMPLEMENTATION_VALIDATED_LOCAL
-version: 0.6.0
-baseline_sha: 6fcc47c4b64f6f5d8b93f09b96d8f98947c9fdb8
-branch: mission/live-agent-comms-20260924
-tests:
-  total: 55
-  passed: 55
-  failed: 0
-agents:
-  Sofia: COMPLETED
-  Emily: COMPLETED
-  Patricia: COMPLETED
-  Rafael: COMPLETED
-next_action: commit_and_push_exact_candidate
-human_authority: LEANDRO
+class: C
+authority: LEANDRO
 orchestrator: MESTRE
+state: VALIDATING_RELEASE_CANDIDATE
+baseline_sha: 6fcc47c4b64f6f5d8b93f09b96d8f98947c9fdb8
+version: 0.6.0
+local_validation:
+  check: PASS
+  tests: "55/55 PASS"
+  diff_check: PASS
+release_sha: PENDING
+appimage_sha256: PENDING
+ci: PENDING
+smoke: PENDING
+audit: PENDING
+deployment: PENDING
+prohibitions:
+  - do_not_merge_pr_6_without_separate_leandro_decision
+  - do_not_delete_mcf_agent_lifecycle_002_untracked_evidence
