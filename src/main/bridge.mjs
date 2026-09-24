@@ -453,8 +453,19 @@ export class LocalAgentBridge {
       return { ok: false, pane, error: 'message_transport_unavailable' };
     }
 
+    const readiness = await this.#waitForMessageComposerReady(wc);
+    if (!readiness?.ok) {
+      return {
+        ok: false,
+        pane,
+        error: readiness?.error ?? 'chat_composer_not_ready',
+        readiness: readiness?.readiness ?? null,
+      };
+    }
+
     const prepared = await wc.executeJavaScript(`(async () => {
       const enforceChatMode = ${pane === 'chat' ? 'true' : 'false'};
+      const isStopControl = ${isGenerationStopControl.toString()};
       const visible = (el) => {
         if (!el) return false;
         const r = el.getBoundingClientRect();
@@ -511,6 +522,33 @@ export class LocalAgentBridge {
 
       const composer = findComposer();
       if (!composer) return { ok:false, error:'chat_composer_not_found' };
+      const stopControl = [...document.querySelectorAll('button')].find(button =>
+        visible(button) && isStopControl({
+          ariaLabel: button.getAttribute('aria-label'),
+          testId: button.getAttribute('data-testid'),
+          title: button.title,
+          text: button.innerText,
+        })
+      );
+      if (stopControl) {
+        return {
+          ok:false,
+          error:'message_send_blocked_generation_active',
+          generationActive:true,
+        };
+      }
+      const composerEditable = composer.getAttribute('aria-disabled') !== 'true'
+        && composer.getAttribute('contenteditable') !== 'false'
+        && composer.disabled !== true
+        && composer.readOnly !== true
+        && (composer.isContentEditable || 'value' in composer);
+      if (!composerEditable) {
+        return {
+          ok:false,
+          error:'chat_composer_not_ready',
+          generationActive:false,
+        };
+      }
 
       const blockReason = (() => {
         let node = composer;
@@ -560,19 +598,74 @@ export class LocalAgentBridge {
 
     if (!prepared?.ok) return { ok: false, pane, error: prepared?.error || 'message_prepare_failed' };
 
-    await wc.insertText(message);
+    try {
+      await wc.insertText(message);
+    } catch (error) {
+      return {
+        ok: false,
+        pane,
+        error: 'message_native_insert_failed',
+        detail: String(error?.message || error),
+      };
+    }
     await new Promise(resolve => setTimeout(resolve, 120));
 
+    const typed = await wc.executeJavaScript(`(() => {
+      const MCF_MESSAGE_INSERT_VERIFICATION = true;
+      const expected = ${JSON.stringify(message)};
+      const composer = document.querySelector('#prompt-textarea')
+        || document.querySelector('textarea')
+        || document.querySelector('[contenteditable="true"]');
+      const normalize = value => String(value || '').replace(/\\s+/g, ' ').trim();
+      const actual = composer
+        ? normalize(composer.innerText || composer.value || composer.textContent || '')
+        : '';
+      const normalizedExpected = normalize(expected);
+      return {
+        ok: Boolean(composer) && actual === normalizedExpected,
+        composerPresent: Boolean(composer),
+        actualLength: actual.length,
+        expectedLength: normalizedExpected.length,
+      };
+    })()`, true).catch(error => ({
+      ok: false,
+      composerPresent: false,
+      actualLength: null,
+      expectedLength: null,
+      error: String(error?.message || error),
+    }));
+
+    if (!typed?.ok) {
+      return {
+        ok: false,
+        pane,
+        error: 'message_native_insert_not_observed',
+        typed,
+      };
+    }
+
     const sent = await wc.executeJavaScript(`(() => {
+      const isStopControl = ${isGenerationStopControl.toString()};
       const visible = (el) => {
         if (!el) return false;
         const r = el.getBoundingClientRect();
         const s = getComputedStyle(el);
         return r.width > 10 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
       };
-      const direct = document.querySelector('[data-testid="send-button"]');
       const buttons = [...document.querySelectorAll('button')].filter(visible);
-      const send = direct || buttons.find((button) => {
+      const stopControl = buttons.find(button => isStopControl({
+        ariaLabel: button.getAttribute('aria-label'),
+        testId: button.getAttribute('data-testid'),
+        title: button.title,
+        text: button.innerText,
+      }));
+      if (stopControl) {
+        return { ok:false, error:'message_send_blocked_generation_active' };
+      }
+      const direct = document.querySelector('[data-testid="send-button"]');
+      const send = (direct && visible(direct) && !direct.disabled)
+        ? direct
+        : buttons.find((button) => {
         const label = String(button.getAttribute('aria-label') || button.title || button.innerText || '').toLowerCase();
         return (label.includes('send') || label.includes('enviar')) && !button.disabled;
       });
