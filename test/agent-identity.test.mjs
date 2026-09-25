@@ -4,6 +4,7 @@ import {
   AGENT_IDENTITY_SCHEMA,
   agentBindingForPane,
   agentBindingsForProfile,
+  agentMissionIdForProfile,
   paneForAgent,
   validateCanonicalAgent,
   buildIdentityBootstrap,
@@ -42,6 +43,22 @@ test('pane bindings are canonical and role-specific', () => {
   assert.equal(sofia.pane, 'workspace');
 
   assert.throws(() => agentBindingForPane('other'), /unknown_agent_pane/);
+});
+
+
+test('backend-quality profile binds Renato and Eduardo and has a dedicated mission identity', () => {
+  const bindings = agentBindingsForProfile('backend-quality');
+  assert.equal(bindings.chat.agentId, 'Renato');
+  assert.equal(bindings.chat.role, 'Qualidade e Testes');
+  assert.equal(bindings.workspace.agentId, 'Eduardo');
+  assert.equal(bindings.workspace.role, 'Engenharia Backend');
+  assert.equal(
+    agentMissionIdForProfile('backend-quality'),
+    'MCF-DUAL-BROWSER-TEAM3-BACKEND-QUALITY-001',
+  );
+  assert.equal(agentMissionIdForProfile('audit-architecture'), 'MCF-DUAL-AGENT-IDENTITY-001');
+  assert.equal(agentMissionIdForProfile('debug-engineering'), 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003');
+  assert.throws(() => agentMissionIdForProfile('unknown'), /unknown_agent_profile/);
 });
 
 test('canonical identity validation fails closed on role or contract mismatch', () => {
