@@ -213,3 +213,21 @@ export function isIdentityBootstrapEvidenceVerified(evidence) {
       && evidence.projectRootOk !== false
   );
 }
+
+export function buildAssistantMarkerProbe(marker) {
+  const normalizedMarker = String(marker || '').trim();
+  if (!normalizedMarker) throw new Error('assistant_marker_required');
+
+  return [
+    '(() => {',
+    'const marker=' + JSON.stringify(normalizedMarker) + ';',
+    'const header=' + JSON.stringify(PANE_IDENTITY_HEADER) + ';',
+    'const textOf=node=>String(node?.innerText||node?.textContent||"");',
+    'const roleAssistants=[...document.querySelectorAll("[data-message-author-role=\\\"assistant\\\"]")];',
+    'if(roleAssistants.some(node=>textOf(node).includes(marker))) return true;',
+    'const turns=[...document.querySelectorAll("section[data-testid^=\\\"conversation-turn-\\\"], article[data-testid^=\\\"conversation-turn-\\\"]")];',
+    'return turns.some(node=>{const text=textOf(node);return text.includes(marker)&&!text.includes(header);});',
+    '})()',
+  ].join('\\n');
+}
+
