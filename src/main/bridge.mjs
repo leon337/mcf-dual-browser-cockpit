@@ -644,7 +644,7 @@ export class LocalAgentBridge {
     }
     await new Promise(resolve => setTimeout(resolve, 120));
 
-    const typed = await wc.executeJavaScript(`(() => {
+    let typed = await wc.executeJavaScript(`(() => {
       const MCF_MESSAGE_INSERT_VERIFICATION = true;
       const expected = ${JSON.stringify(message)};
       const composer = document.querySelector('#prompt-textarea')
@@ -660,6 +660,7 @@ export class LocalAgentBridge {
         composerPresent: Boolean(composer),
         actualLength: actual.length,
         expectedLength: normalizedExpected.length,
+        insertionMethod: 'native',
       };
     })()`, true).catch(error => ({
       ok: false,
@@ -669,12 +670,93 @@ export class LocalAgentBridge {
       error: String(error?.message || error),
     }));
 
+    let insertionFallback = null;
+    if (!typed?.ok && typed?.composerPresent === true && typed?.actualLength === 0) {
+      insertionFallback = await wc.executeJavaScript(`(async () => {
+        const MCF_MESSAGE_PROGRAMMATIC_INSERT_FALLBACK = true;
+        const expected = ${JSON.stringify(message)};
+        const visible = el => {
+          if (!el) return false;
+          const rect = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return rect.width > 20 && rect.height > 10
+            && style.display !== 'none'
+            && style.visibility !== 'hidden';
+        };
+        const composer = [
+          document.querySelector('#prompt-textarea'),
+          document.querySelector('textarea'),
+          ...document.querySelectorAll('[contenteditable="true"]'),
+        ].filter(Boolean).find(visible) || null;
+        if (!composer) {
+          return { ok:false, error:'chat_composer_not_found', composerPresent:false };
+        }
+
+        const normalize = value => String(value || '').replace(/\\s+/g, ' ').trim();
+        const before = normalize(composer.innerText || composer.value || composer.textContent || '');
+        if (before.length !== 0) {
+          return {
+            ok:false,
+            error:'programmatic_insert_refused_nonempty',
+            composerPresent:true,
+            actualLength:before.length,
+          };
+        }
+
+        composer.focus();
+        if (composer.isContentEditable) {
+          composer.textContent = expected;
+        } else if ('value' in composer) {
+          const proto = Object.getPrototypeOf(composer);
+          const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+          if (descriptor?.set) descriptor.set.call(composer, expected);
+          else composer.value = expected;
+        } else {
+          return { ok:false, error:'chat_composer_not_editable', composerPresent:true };
+        }
+
+        try {
+          composer.dispatchEvent(new InputEvent('beforeinput', {
+            bubbles: true,
+            inputType: 'insertText',
+            data: expected,
+          }));
+        } catch {}
+        composer.dispatchEvent(new InputEvent('input', {
+          bubbles: true,
+          inputType: 'insertText',
+          data: expected,
+        }));
+        composer.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise(resolve => setTimeout(resolve, 80));
+
+        const actual = normalize(composer.innerText || composer.value || composer.textContent || '');
+        const normalizedExpected = normalize(expected);
+        return {
+          ok: actual === normalizedExpected,
+          composerPresent: true,
+          actualLength: actual.length,
+          expectedLength: normalizedExpected.length,
+          insertionMethod: 'programmatic-fallback',
+        };
+      })()`, true).catch(error => ({
+        ok: false,
+        composerPresent: false,
+        actualLength: null,
+        expectedLength: null,
+        error: String(error?.message || error),
+      }));
+
+      if (insertionFallback?.ok) typed = insertionFallback;
+    }
+
     if (!typed?.ok) {
       return {
         ok: false,
         pane,
         error: 'message_native_insert_not_observed',
         typed,
+        insertionFallback,
       };
     }
 
@@ -863,6 +945,7 @@ export class LocalAgentBridge {
       baselineAssistantMessageId: verification.baselineLastAssistantMessageId ?? null,
       postSendStable: Boolean(postSend?.composerEmpty || postSendCleanup?.cleaned),
       postSendCleanup,
+      insertionMethod: typed?.insertionMethod ?? 'native',
       url: verification.url ?? (typeof wc.getURL === 'function' ? wc.getURL() : null),
       title: typeof wc.getTitle === 'function' ? wc.getTitle() : null,
     };
