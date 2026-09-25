@@ -32,3 +32,16 @@ Rotas:
 Aliases aceitos: emilly/emily -> chat e sophia/sofia -> workspace. O broadcast executa os alvos concorrentemente.
 
 A Bridge só declara sucesso quando o envio é confirmado pelo esvaziamento do compositor. Bloqueios reais do produto, como rate_limit_hard_block, são reportados por alvo e não são contornados.
+
+## Perfil backend-quality
+
+A instância `notebook-team3` usa o perfil `backend-quality`:
+
+```text
+chat      = Renato  — Qualidade e Testes
+workspace = Eduardo — Engenharia Backend
+```
+
+O perfil usa a missão de identidade `MCF-DUAL-BROWSER-TEAM3-BACKEND-QUALITY-001` e compartilha o mesmo mecanismo de persistência de URLs em `runtime-state.json`.
+
+Em reinício, a instância deve restaurar os URLs persistidos de chat/workspace antes de qualquer bootstrap ou despacho novo. O MESTRE deve confirmar o estado via `GET /v1/discovery` antes de operar.

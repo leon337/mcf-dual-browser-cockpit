@@ -171,8 +171,9 @@ test('runtime dispatches mission envelope only to the identity-bound pane and re
 });
 
 
-test('runtime retries transient fresh-conversation aborts before failing identity bootstrap', async () => {
+test('runtime reconciles a transient fresh-conversation abort before any retry', async () => {
   let freshAttempts = 0;
+  let reconciliationChecks = 0;
   const broker = {
     listAgents: async () => canonical,
     showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
@@ -183,7 +184,16 @@ test('runtime retries transient fresh-conversation aborts before failing identit
     getUrl: pane => 'https://chatgpt.test/' + pane,
     freshConversation: async () => {
       freshAttempts += 1;
-      if (freshAttempts === 1) throw new Error("ERR_ABORTED (-3) loading restored URL");
+      throw new Error("ERR_ABORTED (-3) loading restored URL");
+    },
+    reconcileFreshConversation: async pane => {
+      reconciliationChecks += 1;
+      return {
+        ok: true,
+        fresh: true,
+        composerAvailable: true,
+        url: 'https://chatgpt.test/' + pane,
+      };
     },
     sendMessage: async (pane) => ({ ok: true, pane, method: 'button', url: 'https://chatgpt.test/' + pane + '/c/new' }),
     waitForAssistantMarker: async () => true,
@@ -199,7 +209,8 @@ test('runtime retries transient fresh-conversation aborts before failing identit
 
   const result = await runtime.bootstrap({ agentId: 'Emily' });
   assert.equal(result.ok, true);
-  assert.equal(freshAttempts, 2);
+  assert.equal(freshAttempts, 1);
+  assert.equal(reconciliationChecks, 1);
   assert.equal(runtime.getIdentities().find(x => x.agentId === 'Emily').state, 'READY');
 });
 
@@ -826,6 +837,7 @@ test('conversation change during result observation fails closed and releases th
   };
   const surface = {
     getUrl: pane => 'https://chatgpt.test/' + pane + '/c/conv-other',
+    inspectMissionExecution: async () => ({ ok: true, verified: true, activeExecution: false, generationActive: false, userAnchorFound: true, lateResultObserved: false }),
     freshConversation: async () => {},
     sendMessage: async pane => ({
       ok: true, pane, method: 'button', deliveryConfirmed: true,
@@ -881,11 +893,30 @@ test('conversation change during result observation fails closed and releases th
     && r.evidence?.error === 'conversation_changed_during_result_observation'
   ));
 
+  const blocked = await runtime.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'SUB-AFTER-CONVERSATION-CHANGE',
+    parentMissionId: 'PARENT-AFTER-CONVERSATION-CHANGE',
+    objective: 'Provar que reentrada exige reconciliação antes de novo dispatch.',
+  });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.error, 'pane_recovery_required');
+  assert.equal(blocked.envelopeId, first.envelope.envelopeId);
+
+  const reconciled = await runtime.reconcileMission({
+    envelopeId: first.envelope.envelopeId,
+    outcome: 'no_active_execution_confirmed',
+    authority: 'LEANDRO',
+    evidence: { conversationChanged: true, activeGeneration: false },
+  });
+  assert.equal(reconciled.ok, true);
+  assert.equal(reconciled.reconciliationRequired, false);
+
   const second = await runtime.dispatchMission({
     agentId: 'Sofia',
     missionId: 'SUB-AFTER-CONVERSATION-CHANGE',
     parentMissionId: 'PARENT-AFTER-CONVERSATION-CHANGE',
-    objective: 'Provar que a fila do pane foi liberada.',
+    objective: 'Provar que reentrada exige reconciliação antes de novo dispatch.',
   });
   assert.equal(second.ok, true);
   assert.equal(second.queued, true);
@@ -1595,7 +1626,7 @@ test('runtime explicitly retries a failed logical mission without breaking idemp
         return {
           ok: false,
           pane,
-          error: 'message_send_unconfirmed',
+          error: 'composer_not_found',
           cleanup: { ok: true, cleaned: true, remainingLength: 0 },
           verification: {
             ok: true,
@@ -1845,6 +1876,696 @@ test('runtime keeps delayed assistant start non-terminal while generation remain
 });
 
 
+
+
+test('runtime keeps assistant start non-terminal when thinking/tooling activity was observed without a stop control', async () => {
+  let state = null;
+  let startObservations = 0;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/tooling-start',
+    freshConversation: async () => {},
+    waitForAssistantMarker: async () => true,
+    sendMessage: async pane => ({
+      ok: true,
+      pane,
+      deliveryConfirmed: true,
+      composerCleared: true,
+      conversationAdvanced: true,
+      userMessageId: 'user-tooling-start',
+      baselineAssistantMessageId: 'assistant-before-tooling-start',
+      url: 'https://chatgpt.test/' + pane + '/c/tooling-start',
+    }),
+    waitForAssistantStart: async () => {
+      startObservations += 1;
+      if (startObservations === 1) {
+        return {
+          ok: false,
+          accepted: false,
+          generationActive: false,
+          activityObserved: true,
+          positiveActivityObserved: true,
+          lastActivityAt: Date.now(),
+          error: 'assistant_start_timeout',
+        };
+      }
+      return {
+        ok: true,
+        accepted: true,
+        assistantMessageId: 'assistant-tooling-start',
+        linkedUserMessageId: 'user-tooling-start',
+        markerObserved: false,
+        generationActive: true,
+      };
+    },
+    waitForAssistantResult: async () => ({
+      ok: true,
+      generationFinished: true,
+      generationActive: false,
+      terminalSignal: 'ui_generation_inactive_with_final_actions',
+      finalActionsObserved: true,
+      stableForMs: 1500,
+      assistantMessageId: 'assistant-tooling-start',
+      linkedUserMessageId: 'user-tooling-start',
+      conversationId: 'tooling-start',
+      text: 'Resultado final depois de thinking/tooling sem stop control.',
+    }),
+  };
+
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+  });
+  await runtime.bootstrap();
+
+  const dispatched = await runtime.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'MISSION-TOOLING-ACTIVITY-1',
+    parentMissionId: 'PARENT-TOOLING-ACTIVITY-1',
+    objective: 'Preservar lease durante tooling sem stop control.',
+  });
+  await runtime.waitForPendingMissions();
+
+  const mission = runtime.getMission(dispatched.envelope.envelopeId);
+  assert.equal(startObservations, 2);
+  assert.equal(mission.state, 'COMPLETED');
+  const waiting = runtime.listReceipts().find(r =>
+    r.kind === 'MISSION_ACCEPTANCE_STILL_WAITING'
+    && r.envelope?.envelopeId === dispatched.envelope.envelopeId
+  );
+  assert.ok(waiting);
+  assert.equal(waiting.evidence?.positiveActivityObserved, true);
+  assert.equal(waiting.evidence?.generationActive, false);
+  assert.equal(Number.isFinite(waiting.evidence?.lastActivityAt), true);
+  assert.ok(Date.now() - waiting.evidence.lastActivityAt < 5000);
+});
+
+
+test('runtime reconciles a late assistant result after start timeout without creating a retry', async () => {
+  let state = null;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/late-result',
+    freshConversation: async () => {},
+    waitForAssistantMarker: async () => true,
+    sendMessage: async pane => ({
+      ok: true,
+      pane,
+      deliveryConfirmed: true,
+      composerCleared: true,
+      conversationAdvanced: true,
+      userMessageId: 'user-late-result',
+      baselineAssistantMessageId: 'assistant-before-late-result',
+      url: 'https://chatgpt.test/' + pane + '/c/late-result',
+    }),
+    waitForAssistantStart: async () => ({
+      ok: false,
+      accepted: false,
+      generationActive: false,
+      error: 'assistant_start_timeout',
+      userMessageId: 'user-late-result',
+    }),
+    waitForAssistantResult: async (_pane, input, timeoutMs) => {
+      assert.equal(input.recovery, true);
+      assert.equal(input.startTimeoutRecovery, true);
+      assert.equal(input.userMessageId, 'user-late-result');
+      assert.equal(timeoutMs, 1234);
+      return {
+        ok: true,
+        generationFinished: true,
+        generationActive: false,
+        terminalSignal: 'ui_generation_inactive_with_final_actions',
+        finalActionsObserved: true,
+        stableForMs: 1600,
+        assistantMessageId: 'assistant-late-result',
+        linkedUserMessageId: 'user-late-result',
+        conversationId: 'late-result',
+        text: 'Resultado tardio materializado e reconciliado no envelope original.',
+        url: 'https://chatgpt.test/workspace/c/late-result',
+      };
+    },
+  };
+
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+    startTimeoutRecoveryMs: 1234,
+  });
+  await runtime.bootstrap();
+
+  const input = {
+    agentId: 'Sofia',
+    missionId: 'MISSION-LATE-RESULT-1',
+    parentMissionId: 'PARENT-LATE-RESULT-1',
+    objective: 'Recuperar resultado tardio sem redispatch.',
+  };
+  const dispatched = await runtime.dispatchMission(input);
+  await runtime.waitForPendingMissions();
+
+  const mission = runtime.getMission(dispatched.envelope.envelopeId);
+  assert.equal(mission.state, 'COMPLETED');
+  assert.equal(mission.attemptNumber, 1);
+  assert.equal(mission.retryOfEnvelopeId, null);
+  assert.equal(mission.reconciliationRequired, false);
+  assert.equal(mission.reconciliationOutcome, 'late_result_validated');
+  assert.equal(mission.result.assistantMessageId, 'assistant-late-result');
+  assert.equal(mission.result.linkedUserMessageId, 'user-late-result');
+
+  const kinds = runtime.listReceipts()
+    .filter(r => r.envelope?.envelopeId === dispatched.envelope.envelopeId)
+    .map(r => r.kind);
+  assert.ok(kinds.includes('MISSION_RECOVERING'));
+  assert.ok(kinds.includes('MISSION_LATE_RESULT_RECOVERED'));
+  assert.ok(kinds.includes('MISSION_COMPLETED'));
+  assert.equal(kinds.includes('MISSION_ACCEPTANCE_UNVERIFIED'), false);
+});
+
+test('runtime blocks retry and new same-pane mission while start-timeout reconciliation is unresolved', async () => {
+  let state = null;
+  let startCalls = 0;
+  let resultCalls = 0;
+  let missionSendCalls = 0;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/reconcile-retry',
+    inspectMissionExecution: async () => ({ ok: true, verified: true, activeExecution: false, generationActive: false, userAnchorFound: true, lateResultObserved: false }),
+    freshConversation: async () => {},
+    waitForAssistantMarker: async () => true,
+    sendMessage: async pane => {
+      if (pane === 'workspace') missionSendCalls += 1;
+      return {
+        ok: true,
+        pane,
+        deliveryConfirmed: true,
+        composerCleared: true,
+        conversationAdvanced: true,
+        userMessageId: 'user-reconcile-' + missionSendCalls,
+        baselineAssistantMessageId: 'assistant-before-reconcile-' + missionSendCalls,
+        url: 'https://chatgpt.test/' + pane + '/c/reconcile-retry',
+      };
+    },
+    waitForAssistantStart: async () => {
+      startCalls += 1;
+      if (startCalls === 1) {
+        return {
+          ok: false,
+          accepted: false,
+          generationActive: false,
+          error: 'assistant_start_timeout',
+        };
+      }
+      return {
+        ok: true,
+        accepted: true,
+        assistantMessageId: 'assistant-retry-success',
+        linkedUserMessageId: 'user-reconcile-2',
+        markerObserved: true,
+        generationActive: true,
+      };
+    },
+    waitForAssistantResult: async () => {
+      resultCalls += 1;
+      if (resultCalls === 1) {
+        return {
+          ok: false,
+          generationFinished: false,
+          generationActive: null,
+          terminalSignal: 'result_timeout',
+        };
+      }
+      return {
+        ok: true,
+        generationFinished: true,
+        generationActive: false,
+        terminalSignal: 'ui_generation_inactive_with_final_actions',
+        finalActionsObserved: true,
+        stableForMs: 1600,
+        assistantMessageId: 'assistant-retry-success',
+        linkedUserMessageId: 'user-reconcile-2',
+        conversationId: 'reconcile-retry',
+        text: 'Resultado da tentativa autorizada após reconciliação.',
+        url: 'https://chatgpt.test/workspace/c/reconcile-retry',
+      };
+    },
+  };
+
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+    startTimeoutRecoveryMs: 5,
+  });
+  await runtime.bootstrap();
+  missionSendCalls = 0;
+
+  const input = {
+    agentId: 'Sofia',
+    missionId: 'MISSION-RECONCILE-RETRY-1',
+    parentMissionId: 'PARENT-RECONCILE-RETRY-1',
+    objective: 'Bloquear retry enquanto o efeito anterior for incerto.',
+  };
+  const first = await runtime.dispatchMission(input);
+  await runtime.waitForPendingMissions();
+
+  const firstMission = runtime.getMission(first.envelope.envelopeId);
+  assert.equal(firstMission.state, 'UNVERIFIED');
+  assert.equal(firstMission.reconciliationRequired, true);
+  assert.equal(firstMission.reconciliationReason, 'assistant_start_observation_timeout');
+
+  const checkpoint = runtime.getRecoveryCheckpoint({ pane: 'workspace' });
+  assert.equal(checkpoint.ok, true);
+  assert.equal(checkpoint.mutationAllowed, false);
+  assert.equal(checkpoint.blockers.length, 1);
+
+  const blockedRetry = await runtime.dispatchMission({ ...input, retryFailed: true });
+  assert.equal(blockedRetry.ok, false);
+  assert.equal(blockedRetry.error, 'mission_reconciliation_required');
+  assert.equal(missionSendCalls, 1);
+
+  const blockedNewMission = await runtime.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'MISSION-DIFFERENT-WHILE-UNCERTAIN',
+    parentMissionId: 'PARENT-RECONCILE-RETRY-1',
+    objective: 'Não deve ser despachada antes da reconciliação.',
+  });
+  assert.equal(blockedNewMission.ok, false);
+  assert.equal(blockedNewMission.error, 'pane_recovery_required');
+  assert.equal(missionSendCalls, 1);
+
+  const reconciled = await runtime.reconcileMission({
+    envelopeId: first.envelope.envelopeId,
+    outcome: 'no_active_execution_confirmed',
+    authority: 'LEANDRO',
+    evidence: { generationActive: false, lateResultFound: false },
+  });
+  assert.equal(reconciled.ok, true);
+  assert.equal(reconciled.reconciliationRequired, false);
+  assert.equal(runtime.getRecoveryCheckpoint({ pane: 'workspace' }).mutationAllowed, true);
+
+  const retry = await runtime.dispatchMission({ ...input, retryFailed: true });
+  assert.equal(retry.ok, true);
+  assert.equal(retry.retried, true);
+  assert.equal(retry.retryOfEnvelopeId, first.envelope.envelopeId);
+  assert.equal(retry.attemptNumber, 2);
+  await runtime.waitForPendingMissions();
+
+  const retryMission = runtime.getMission(retry.envelope.envelopeId);
+  assert.equal(retryMission.state, 'COMPLETED');
+  assert.equal(missionSendCalls, 2);
+});
+
+test('reconciliation requirement survives restart and still blocks retry', async () => {
+  let state = null;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/restart-uncertain',
+    freshConversation: async () => {},
+    waitForAssistantMarker: async () => true,
+    sendMessage: async pane => ({
+      ok: true,
+      pane,
+      deliveryConfirmed: true,
+      composerCleared: true,
+      conversationAdvanced: true,
+      userMessageId: 'user-restart-uncertain',
+      baselineAssistantMessageId: 'assistant-before-restart-uncertain',
+      url: 'https://chatgpt.test/' + pane + '/c/restart-uncertain',
+    }),
+    waitForAssistantStart: async () => ({
+      ok: false,
+      accepted: false,
+      generationActive: false,
+      error: 'assistant_start_timeout',
+    }),
+    waitForAssistantResult: async () => ({
+      ok: false,
+      generationFinished: false,
+      generationActive: null,
+      terminalSignal: 'result_timeout',
+    }),
+  };
+
+  const runtimeA = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+    startTimeoutRecoveryMs: 5,
+  });
+  await runtimeA.bootstrap();
+  const input = {
+    agentId: 'Sofia',
+    missionId: 'MISSION-RESTART-UNCERTAIN',
+    parentMissionId: 'PARENT-RESTART-UNCERTAIN',
+    objective: 'Persistir incerteza entre restarts.',
+  };
+  const first = await runtimeA.dispatchMission(input);
+  await runtimeA.waitForPendingMissions();
+  assert.equal(runtimeA.getMission(first.envelope.envelopeId).reconciliationRequired, true);
+
+  const runtimeB = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+    startTimeoutRecoveryMs: 5,
+  });
+  const restored = runtimeB.getMission(first.envelope.envelopeId);
+  assert.equal(restored.state, 'UNVERIFIED');
+  assert.equal(restored.reconciliationRequired, true);
+  const retry = await runtimeB.dispatchMission({ ...input, retryFailed: true });
+  assert.equal(retry.ok, false);
+  assert.equal(retry.error, 'mission_reconciliation_required');
+});
+
+test('explicit cancellation is a request until no-effect reconciliation confirms terminal cancellation', async () => {
+  let state = null;
+  let cancelCalls = 0;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  let releaseStart;
+  const waitForStart = new Promise(resolve => { releaseStart = resolve; });
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/cancel-explicit',
+    inspectMissionExecution: async () => ({ ok: true, verified: true, activeExecution: false, generationActive: false, userAnchorFound: true, lateResultObserved: false }),
+    freshConversation: async () => {},
+    waitForAssistantMarker: async () => true,
+    sendMessage: async pane => ({
+      ok: true,
+      pane,
+      deliveryConfirmed: true,
+      composerCleared: true,
+      conversationAdvanced: true,
+      userMessageId: 'user-cancel-explicit',
+      baselineAssistantMessageId: 'assistant-before-cancel-explicit',
+      url: 'https://chatgpt.test/' + pane + '/c/cancel-explicit',
+    }),
+    waitForAssistantStart: async () => {
+      await waitForStart;
+      return {
+        ok: false,
+        accepted: false,
+        interrupted: true,
+        error: 'assistant_interrupted',
+        linkedUserMessageId: 'user-cancel-explicit',
+      };
+    },
+    cancelAssistantGeneration: async (_pane, input) => {
+      cancelCalls += 1;
+      assert.match(input.expectedConversationUrl, /cancel-explicit/);
+      assert.equal(input.expectedUserMessageId, 'user-cancel-explicit');
+      releaseStart();
+      return { ok: true, requested: true, generationActive: false };
+    },
+  };
+
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+  });
+  await runtime.bootstrap();
+
+  const dispatched = await runtime.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'MISSION-CANCEL-EXPLICIT',
+    parentMissionId: 'PARENT-CANCEL-EXPLICIT',
+    objective: 'Cancelar somente por operação explícita.',
+  });
+
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const requested = await runtime.requestMissionCancellation({
+    envelopeId: dispatched.envelope.envelopeId,
+    authority: 'LEANDRO',
+    reason: 'Teste explícito de cancelamento.',
+  });
+  assert.equal(requested.ok, true);
+  assert.equal(requested.cancellationRequested, true);
+  assert.equal(requested.reconciliationRequired, true);
+  assert.equal(cancelCalls, 1);
+
+  await runtime.waitForPendingMissions();
+  const interrupted = runtime.getMission(dispatched.envelope.envelopeId);
+  assert.equal(interrupted.state, 'INTERRUPTED');
+  assert.equal(interrupted.reconciliationRequired, true);
+  assert.equal(runtime.getRecoveryCheckpoint({ pane: 'workspace' }).mutationAllowed, false);
+
+  const reconciled = await runtime.reconcileMission({
+    envelopeId: dispatched.envelope.envelopeId,
+    outcome: 'cancelled_no_effect_confirmed',
+    authority: 'LEANDRO',
+    evidence: { generationActive: false, externalEffectObserved: false },
+  });
+  assert.equal(reconciled.ok, true);
+  assert.equal(reconciled.state, 'CANCELLED_BY_AUTHORITY');
+  assert.equal(runtime.getRecoveryCheckpoint({ pane: 'workspace' }).mutationAllowed, true);
+
+  const kinds = runtime.listReceipts()
+    .filter(r => r.envelope?.envelopeId === dispatched.envelope.envelopeId)
+    .map(r => r.kind);
+  assert.ok(kinds.includes('MISSION_CANCEL_REQUESTED'));
+  assert.ok(kinds.includes('MISSION_CANCEL_SIGNAL_SENT'));
+  assert.ok(kinds.includes('MISSION_CANCELLED_BY_AUTHORITY'));
+});
+
+
+test('cancelling a QUEUED mission defers the Stop signal until its own delivery is identified', async () => {
+  let state = null;
+  let releaseDelivery;
+  let signalDeliveryStarted;
+  const deliveryStarted = new Promise(resolve => { signalDeliveryStarted = resolve; });
+  const deliveryGate = new Promise(resolve => { releaseDelivery = resolve; });
+  let cancelCalls = 0;
+
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/queued-cancel',
+    freshConversation: async () => {},
+    waitForAssistantMarker: async () => true,
+    sendMessage: async (pane, message) => {
+      if (!String(message || '').includes('[MCF MISSION ENVELOPE]')) {
+        return {
+          ok: true,
+          pane,
+          url: 'https://chatgpt.test/' + pane + '/c/identity-bootstrap',
+        };
+      }
+      signalDeliveryStarted();
+      await deliveryGate;
+      return {
+        ok: true,
+        pane,
+        deliveryConfirmed: true,
+        composerCleared: true,
+        conversationAdvanced: true,
+        userMessageId: 'user-queued-cancel',
+        baselineAssistantMessageId: 'assistant-before-queued-cancel',
+        url: 'https://chatgpt.test/' + pane + '/c/queued-cancel',
+      };
+    },
+    cancelAssistantGeneration: async (_pane, input) => {
+      cancelCalls += 1;
+      assert.equal(input.expectedConversationUrl, 'https://chatgpt.test/workspace/c/queued-cancel');
+      assert.equal(input.expectedUserMessageId, 'user-queued-cancel');
+      return {
+        ok: true,
+        requested: true,
+        generationInactiveObserved: true,
+        reconciliationRequired: true,
+      };
+    },
+    waitForAssistantStart: async () => ({
+      ok: false,
+      accepted: false,
+      interrupted: true,
+      error: 'assistant_interrupted',
+      terminalSignal: 'assistant_interrupted',
+      linkedUserMessageId: 'user-queued-cancel',
+    }),
+  };
+
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+  });
+  await runtime.bootstrap();
+
+  const dispatched = await runtime.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'MISSION-QUEUED-CANCEL-1',
+    parentMissionId: 'PARENT-QUEUED-CANCEL-1',
+    objective: 'Não parar outra execução enquanto o próprio delivery ainda é desconhecido.',
+  });
+  await deliveryStarted;
+
+  const requested = await runtime.requestMissionCancellation({
+    envelopeId: dispatched.envelope.envelopeId,
+    authority: 'LEANDRO',
+    reason: 'explicit queued cancellation test',
+  });
+  assert.equal(requested.ok, true);
+  assert.equal(requested.cancellationSignal?.deferred, true);
+  assert.equal(cancelCalls, 0);
+
+  releaseDelivery();
+  await runtime.waitForPendingMissions();
+
+  assert.equal(cancelCalls, 1);
+  const mission = runtime.getMission(dispatched.envelope.envelopeId);
+  assert.equal(mission.state, 'INTERRUPTED');
+  assert.equal(mission.cancellationRequested, true);
+  assert.equal(mission.cancellationSignal?.requested, true);
+  const kinds = runtime.listReceipts()
+    .filter(r => r.envelope?.envelopeId === dispatched.envelope.envelopeId)
+    .map(r => r.kind);
+  assert.ok(kinds.includes('MISSION_CANCEL_SIGNAL_DEFERRED'));
+  assert.ok(kinds.includes('MISSION_CANCEL_SIGNAL_SENT'));
+});
+
+
+test('historical cancellation request on a COMPLETED mission does not permanently block its pane', async () => {
+  let state = null;
+  let seq = 0;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/completed-cancel-history',
+    freshConversation: async () => {},
+    waitForAssistantMarker: async () => true,
+    sendMessage: async pane => {
+      seq += 1;
+      return {
+        ok: true,
+        pane,
+        deliveryConfirmed: true,
+        composerCleared: true,
+        conversationAdvanced: true,
+        userMessageId: 'user-completed-' + seq,
+        baselineAssistantMessageId: 'assistant-before-completed-' + seq,
+        url: 'https://chatgpt.test/' + pane + '/c/completed-cancel-history',
+      };
+    },
+    waitForAssistantStart: async () => ({
+      ok: true,
+      accepted: true,
+      assistantMessageId: 'assistant-completed-' + seq,
+      linkedUserMessageId: 'user-completed-' + seq,
+      markerObserved: false,
+      generationActive: false,
+    }),
+    waitForAssistantResult: async () => ({
+      ok: true,
+      generationFinished: true,
+      generationActive: false,
+      terminalSignal: 'ui_generation_inactive_with_final_actions',
+      finalActionsObserved: true,
+      stableForMs: 1500,
+      assistantMessageId: 'assistant-completed-' + seq,
+      linkedUserMessageId: 'user-completed-' + seq,
+      conversationId: 'completed-cancel-history',
+      text: 'Resultado terminal ' + seq,
+    }),
+  };
+
+  const runtime1 = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+  });
+  await runtime1.bootstrap();
+  const first = await runtime1.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'MISSION-COMPLETED-CANCEL-HISTORY-1',
+    parentMissionId: 'PARENT-COMPLETED-CANCEL-HISTORY',
+    objective: 'Gerar um terminal válido.',
+  });
+  await runtime1.waitForPendingMissions();
+  assert.equal(runtime1.getMission(first.envelope.envelopeId).state, 'COMPLETED');
+
+  state.missions[first.envelope.envelopeId].cancellationRequested = true;
+  state.missions[first.envelope.envelopeId].cancellationOutcome = 'too_late_result_completed';
+  state.missions[first.envelope.envelopeId].reconciliationRequired = false;
+
+  const runtime2 = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker,
+    surface,
+    loadState: () => structuredClone(state),
+    saveState: next => { state = structuredClone(next); },
+  });
+
+  const second = await runtime2.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'MISSION-AFTER-COMPLETED-CANCEL-HISTORY',
+    parentMissionId: 'PARENT-COMPLETED-CANCEL-HISTORY',
+    objective: 'Provar que o pane não fica bloqueado por flag histórica.',
+  });
+  assert.equal(second.ok, true);
+  assert.equal(second.queued, true);
+  await runtime2.waitForPendingMissions();
+  assert.equal(runtime2.getMission(second.envelope.envelopeId).state, 'COMPLETED');
+});
+
+
 test('runtime bootstraps Patrícia and Rafael with profile-specific immutable pane bindings', async () => {
   const sent = [];
   let persisted = null;
@@ -1934,9 +2655,20 @@ test('identity bootstrap recovers message_send_unconfirmed when the exact ready 
   };
   const surface = {
     getUrl: () => 'https://chatgpt.test/c/rafael',
-    freshConversation: async () => {},
+    freshConversation: async () => ({ ok: true, url: 'https://chatgpt.test/g/project' }),
     sendMessage: async () => ({ ok: false, error: 'message_send_unconfirmed' }),
     waitForAssistantMarker: async (_pane, marker) => marker.includes('agent_id=Rafael'),
+    inspectIdentityBootstrap: async (_pane, input) => ({
+      ok: true,
+      verified: true,
+      userAnchorFound: true,
+      markerObserved: true,
+      conflictingAttempt: false,
+      userMessageId: 'user-rafael',
+      assistantMessageId: 'assistant-rafael',
+      url: 'https://chatgpt.test/g/project/c/rafael',
+      marker: input.marker,
+    }),
   };
 
   const runtime = new PaneAgentRuntime({
@@ -1954,9 +2686,202 @@ test('identity bootstrap recovers message_send_unconfirmed when the exact ready 
   assert.equal(persisted.bindings.workspace.state, 'READY');
   assert.equal(persisted.bindings.workspace.handshakeVerified, true);
   const kinds = runtime.listReceipts().map(receipt => receipt.kind);
-  assert.ok(kinds.includes('IDENTITY_BOOTSTRAP_DELIVERY_RECOVERED'));
+  assert.ok(kinds.includes('IDENTITY_BOOTSTRAP_DELIVERY_UNCERTAIN'));
   assert.ok(kinds.includes('HANDSHAKE_VERIFIED'));
   assert.equal(kinds.includes('IDENTITY_BOOTSTRAP_DELIVERY_FAILED'), false);
+});
+
+test('identity bootstrap reconciles late delivery without creating or sending a duplicate', async () => {
+  const bindings = agentBindingsForProfile('debug-engineering');
+  let persisted = null;
+  let freshCalls = 0;
+  let sendCalls = 0;
+  let evidenceReady = false;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async () => sessionFor('Rafael'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: () => evidenceReady
+      ? 'https://chatgpt.test/g/project/c/rafael'
+      : 'https://chatgpt.test/g/project',
+    freshConversation: async () => {
+      freshCalls += 1;
+      return { ok: true, url: 'https://chatgpt.test/g/project' };
+    },
+    sendMessage: async () => {
+      sendCalls += 1;
+      return { ok: false, error: 'message_send_unconfirmed' };
+    },
+    waitForAssistantMarker: async () => evidenceReady,
+    inspectIdentityBootstrap: async () => ({
+      ok: true,
+      verified: evidenceReady,
+      userAnchorFound: evidenceReady,
+      markerObserved: evidenceReady,
+      conflictingAttempt: false,
+      userMessageId: evidenceReady ? 'user-rafael' : null,
+      assistantMessageId: evidenceReady ? 'assistant-rafael' : null,
+      url: evidenceReady
+        ? 'https://chatgpt.test/g/project/c/rafael'
+        : 'https://chatgpt.test/g/project',
+      error: evidenceReady ? null : 'identity_bootstrap_user_anchor_not_found',
+    }),
+  };
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook-team2',
+    missionId: 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003',
+    broker,
+    surface,
+    agentBindings: bindings,
+    loadState: () => null,
+    saveState: state => { persisted = structuredClone(state); },
+  });
+
+  const first = await runtime.bootstrap({ agentId: 'Rafael' });
+  assert.equal(first.ok, false);
+  assert.equal(first.agents[0].error, 'identity_bootstrap_reconciliation_required');
+  assert.equal(persisted.bindings.workspace.state, 'RECONCILING');
+  assert.equal(persisted.bindings.workspace.reconciliationRequired, true);
+  assert.equal(freshCalls, 1);
+  assert.equal(sendCalls, 1);
+
+  evidenceReady = true;
+  const second = await runtime.bootstrap({ agentId: 'Rafael' });
+  assert.equal(second.ok, true);
+  assert.equal(second.agents[0].reconciled, true);
+  assert.equal(persisted.bindings.workspace.state, 'READY');
+  assert.equal(persisted.bindings.workspace.handshakeVerified, true);
+  assert.equal(persisted.bindings.workspace.reconciliationRequired, false);
+  assert.equal(freshCalls, 1);
+  assert.equal(sendCalls, 1);
+});
+
+test('identity bootstrap restart reconciles the original uncertain attempt before any resend', async () => {
+  const bindings = agentBindingsForProfile('debug-engineering');
+  let persisted = null;
+  let freshCalls = 0;
+  let sendCalls = 0;
+  let evidenceReady = false;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async () => sessionFor('Rafael'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: () => evidenceReady
+      ? 'https://chatgpt.test/g/project/c/restart'
+      : 'https://chatgpt.test/g/project',
+    freshConversation: async () => {
+      freshCalls += 1;
+      return { ok: true, url: 'https://chatgpt.test/g/project' };
+    },
+    sendMessage: async () => {
+      sendCalls += 1;
+      return { ok: false, error: 'message_send_unconfirmed' };
+    },
+    waitForAssistantMarker: async () => evidenceReady,
+    inspectIdentityBootstrap: async () => ({
+      ok: true,
+      verified: evidenceReady,
+      userAnchorFound: evidenceReady,
+      markerObserved: evidenceReady,
+      conflictingAttempt: false,
+      userMessageId: evidenceReady ? 'user-restart' : null,
+      assistantMessageId: evidenceReady ? 'assistant-restart' : null,
+      url: evidenceReady
+        ? 'https://chatgpt.test/g/project/c/restart'
+        : 'https://chatgpt.test/g/project',
+      error: evidenceReady ? null : 'identity_bootstrap_user_anchor_not_found',
+    }),
+  };
+
+  const firstRuntime = new PaneAgentRuntime({
+    instanceId: 'notebook-team2',
+    missionId: 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003',
+    broker,
+    surface,
+    agentBindings: bindings,
+    loadState: () => null,
+    saveState: state => { persisted = structuredClone(state); },
+  });
+  const first = await firstRuntime.bootstrap({ agentId: 'Rafael' });
+  assert.equal(first.ok, false);
+  assert.equal(sendCalls, 1);
+
+  evidenceReady = true;
+  const restarted = new PaneAgentRuntime({
+    instanceId: 'notebook-team2',
+    missionId: 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003',
+    broker,
+    surface,
+    agentBindings: bindings,
+    loadState: () => structuredClone(persisted),
+    saveState: state => { persisted = structuredClone(state); },
+  });
+  const recovered = await restarted.bootstrap({ agentId: 'Rafael', force: true });
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.agents[0].reconciled, true);
+  assert.equal(sendCalls, 1);
+  assert.equal(freshCalls, 1);
+  assert.equal(persisted.bindings.workspace.state, 'READY');
+  assert.equal(persisted.bindings.workspace.handshakeVerified, true);
+});
+
+test('identity bootstrap stays fail-closed when uncertain delivery cannot be correlated', async () => {
+  const bindings = agentBindingsForProfile('debug-engineering');
+  let persisted = null;
+  let freshCalls = 0;
+  let sendCalls = 0;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async () => sessionFor('Rafael'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: () => 'https://chatgpt.test/g/project',
+    freshConversation: async () => {
+      freshCalls += 1;
+      return { ok: true, url: 'https://chatgpt.test/g/project' };
+    },
+    sendMessage: async () => {
+      sendCalls += 1;
+      return { ok: false, error: 'message_send_unconfirmed' };
+    },
+    waitForAssistantMarker: async () => false,
+    inspectIdentityBootstrap: async () => ({
+      ok: true,
+      verified: false,
+      userAnchorFound: false,
+      markerObserved: false,
+      conflictingAttempt: false,
+      url: 'https://chatgpt.test/g/project',
+      error: 'identity_bootstrap_user_anchor_not_found',
+    }),
+  };
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook-team2',
+    missionId: 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003',
+    broker,
+    surface,
+    agentBindings: bindings,
+    loadState: () => null,
+    saveState: state => { persisted = structuredClone(state); },
+  });
+
+  const first = await runtime.bootstrap({ agentId: 'Rafael' });
+  const second = await runtime.bootstrap({ agentId: 'Rafael', force: true });
+  assert.equal(first.ok, false);
+  assert.equal(second.ok, false);
+  assert.equal(second.agents[0].error, 'identity_bootstrap_reconciliation_required');
+  assert.equal(sendCalls, 1);
+  assert.equal(freshCalls, 1);
+  assert.equal(persisted.bindings.workspace.state, 'RECONCILING');
+  assert.equal(persisted.bindings.workspace.handshakeVerified, false);
 });
 
 test('runtime fails closed on lost conversation anchor and releases same-pane queue', async () => {
@@ -1970,6 +2895,7 @@ test('runtime fails closed on lost conversation anchor and releases same-pane qu
   };
   const surface = {
     getUrl: pane => 'https://chatgpt.test/' + pane + '/c/conv-live',
+    inspectMissionExecution: async () => ({ ok: true, verified: true, activeExecution: false, generationActive: false, userAnchorFound: true, lateResultObserved: false }),
     freshConversation: async () => {},
     sendMessage: async pane => ({
       ok: true,
@@ -2026,16 +2952,39 @@ test('runtime fails closed on lost conversation anchor and releases same-pane qu
     parentMissionId: 'PARENT-LIVE',
     objective: 'Simular perda do anchor.',
   });
+  const blockedSecond = await runtime.dispatchMission({
+    agentId: 'Emily',
+    missionId: 'MISSION-AFTER-ANCHOR-LOSS',
+    parentMissionId: 'PARENT-LIVE',
+    objective: 'Provar que a fila só libera após reconciliação.',
+  });
+  assert.equal(blockedSecond.ok, false);
+  assert.equal(blockedSecond.error, 'pane_mission_active');
+
+  await runtime.waitForPendingMissions();
+
+  const firstAfterLoss = runtime.getMission(first.envelope.envelopeId);
+  assert.equal(firstAfterLoss.state, 'UNVERIFIED');
+  assert.equal(firstAfterLoss.reconciliationRequired, true);
+  assert.equal(runtime.getRecoveryCheckpoint({ pane: 'chat' }).mutationAllowed, false);
+
+  const reconciled = await runtime.reconcileMission({
+    envelopeId: first.envelope.envelopeId,
+    outcome: 'no_active_execution_confirmed',
+    authority: 'LEANDRO',
+    evidence: { currentConversationReconciled: true, lateResultFound: false },
+  });
+  assert.equal(reconciled.ok, true);
+
   const second = await runtime.dispatchMission({
     agentId: 'Emily',
     missionId: 'MISSION-AFTER-ANCHOR-LOSS',
     parentMissionId: 'PARENT-LIVE',
-    objective: 'Provar que a fila foi liberada.',
+    objective: 'Provar que a fila só libera após reconciliação.',
   });
-
+  assert.equal(second.ok, true);
   await runtime.waitForPendingMissions();
 
-  assert.equal(runtime.getMission(first.envelope.envelopeId).state, 'UNVERIFIED');
   assert.equal(runtime.getMission(second.envelope.envelopeId).state, 'COMPLETED');
   assert.ok(observedExpectedUrls.every(url => url?.endsWith('/c/conv-live')));
   assert.ok(runtime.listReceipts().some(receipt =>
@@ -2043,4 +2992,539 @@ test('runtime fails closed on lost conversation anchor and releases same-pane qu
     && receipt.envelope?.envelopeId === first.envelope.envelopeId
     && receipt.evidence?.error === 'conversation_anchor_lost_during_result_observation'
   ));
+});
+
+
+test('reconciliation requires caller evidence plus live proof and refuses active or late execution', async () => {
+  let state = null;
+  let observation = {
+    ok: true,
+    verified: true,
+    activeExecution: false,
+    generationActive: false,
+    userAnchorFound: true,
+    lateResultObserved: false,
+  };
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/reconcile-live-proof',
+    freshConversation: async () => {},
+    waitForAssistantMarker: async () => true,
+    sendMessage: async pane => ({
+      ok: true,
+      pane,
+      deliveryConfirmed: true,
+      composerCleared: true,
+      conversationAdvanced: true,
+      userMessageId: 'user-reconcile-live-proof',
+      baselineAssistantMessageId: 'assistant-before-reconcile-live-proof',
+      url: 'https://chatgpt.test/' + pane + '/c/reconcile-live-proof',
+    }),
+    waitForAssistantStart: async () => ({
+      ok: false,
+      accepted: false,
+      generationActive: false,
+      error: 'assistant_start_timeout',
+    }),
+    waitForAssistantResult: async () => ({
+      ok: false,
+      generationFinished: false,
+      generationActive: false,
+      terminalSignal: 'result_timeout',
+    }),
+    inspectMissionExecution: async () => structuredClone(observation),
+  };
+
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+    startTimeoutRecoveryMs: 5,
+  });
+  await runtime.bootstrap();
+
+  const dispatched = await runtime.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'MISSION-RECONCILE-LIVE-PROOF',
+    parentMissionId: 'PARENT-RECONCILE-LIVE-PROOF',
+    objective: 'Exigir prova live antes de liberar a pane.',
+  });
+  await runtime.waitForPendingMissions();
+  const envelopeId = dispatched.envelope.envelopeId;
+  assert.equal(runtime.getMission(envelopeId).state, 'UNVERIFIED');
+  assert.equal(runtime.getMission(envelopeId).reconciliationRequired, true);
+
+  const missingEvidence = await runtime.reconcileMission({
+    envelopeId,
+    outcome: 'no_active_execution_confirmed',
+    authority: 'LEANDRO',
+  });
+  assert.equal(missingEvidence.ok, false);
+  assert.equal(missingEvidence.error, 'reconciliation_evidence_required');
+
+  observation = { ...observation, activeExecution: true, generationActive: true };
+  const active = await runtime.reconcileMission({
+    envelopeId,
+    outcome: 'no_active_execution_confirmed',
+    authority: 'LEANDRO',
+    evidence: { operatorCheckpoint: 'active-check' },
+  });
+  assert.equal(active.ok, false);
+  assert.equal(active.error, 'mission_execution_still_active');
+  assert.equal(runtime.getRecoveryCheckpoint({ pane: 'workspace' }).mutationAllowed, false);
+
+  observation = {
+    ...observation,
+    activeExecution: false,
+    generationActive: false,
+    lateResultObserved: true,
+    assistantMessageId: 'assistant-late-proof',
+    assistantTextLength: 42,
+  };
+  const late = await runtime.reconcileMission({
+    envelopeId,
+    outcome: 'no_active_execution_confirmed',
+    authority: 'LEANDRO',
+    evidence: { operatorCheckpoint: 'late-check' },
+  });
+  assert.equal(late.ok, false);
+  assert.equal(late.error, 'late_result_recovery_incomplete');
+
+  observation = {
+    ...observation,
+    lateResultObserved: false,
+    assistantMessageId: null,
+    assistantTextLength: 0,
+    toolActivityObserved: true,
+  };
+  const externalEffect = await runtime.reconcileMission({
+    envelopeId,
+    outcome: 'no_active_execution_confirmed',
+    authority: 'LEANDRO',
+    evidence: { operatorCheckpoint: 'external-effect-check' },
+  });
+  assert.equal(externalEffect.ok, false);
+  assert.equal(externalEffect.error, 'external_effect_reconciliation_required');
+  assert.equal(runtime.getRecoveryCheckpoint({ pane: 'workspace' }).mutationAllowed, false);
+
+  observation = {
+    ...observation,
+    toolActivityObserved: false,
+  };
+  const illegalCancel = await runtime.reconcileMission({
+    envelopeId,
+    outcome: 'cancelled_no_effect_confirmed',
+    authority: 'LEANDRO',
+    evidence: { operatorCheckpoint: 'cancel-check' },
+  });
+  assert.equal(illegalCancel.ok, false);
+  assert.equal(illegalCancel.error, 'explicit_cancellation_required');
+
+  const safe = await runtime.reconcileMission({
+    envelopeId,
+    outcome: 'no_active_execution_confirmed',
+    authority: 'LEANDRO',
+    evidence: { operatorCheckpoint: 'safe-check' },
+  });
+  assert.equal(safe.ok, true);
+  assert.equal(safe.reconciliationRequired, false);
+  assert.equal(safe.liveEvidence.activeExecution, false);
+  assert.equal(runtime.getRecoveryCheckpoint({ pane: 'workspace' }).mutationAllowed, true);
+});
+
+
+test('restart during RECOVERING resumes the original envelope and captures a late result', async () => {
+  const envelope = {
+    schema: 'mcf-mission-envelope/v1',
+    envelopeId: 'env-restart-recovering',
+    missionId: 'MISSION-RESTART-RECOVERING',
+    parentMissionId: 'PARENT-RESTART-RECOVERING',
+    required: true,
+    createdAt: '2026-09-24T16:00:00.000Z',
+    agent: {
+      agentId: 'Sofia',
+      role: 'Arquitetura de Software',
+      pane: 'workspace',
+      contractRef: 'docs/agentes/SOFIA.md',
+      contractDigest: canonical[1].contractDigest,
+    },
+    session: { sessionId: 'session-sofia', traceId: 'trace-sofia' },
+    authority: { human: 'LEANDRO', orchestrator: 'MESTRE' },
+    objective: 'Recuperar resultado tardio após restart.',
+    inputs: [],
+    constraints: [],
+    expectedOutputs: [],
+  };
+  let state = {
+    schema: 'mcf-pane-agent-runtime/v1',
+    version: 2,
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    bindings: {},
+    receipts: [],
+    missions: {
+      [envelope.envelopeId]: {
+        schema: 'mcf-agent-mission-execution/v1',
+        envelopeId: envelope.envelopeId,
+        missionId: envelope.missionId,
+        parentMissionId: envelope.parentMissionId,
+        required: true,
+        executionId: 'exec-restart-recovering',
+        agentId: 'Sofia',
+        role: 'Arquitetura de Software',
+        pane: 'workspace',
+        sessionId: 'session-sofia',
+        traceId: 'trace-sofia',
+        contractRef: 'docs/agentes/SOFIA.md',
+        contractDigest: canonical[1].contractDigest,
+        envelopeDigest: 'c'.repeat(64),
+        envelope,
+        acceptanceMarker: 'MCF_MISSION_ACCEPTED envelope_id=env-restart-recovering agent_id=Sofia',
+        delivery: {
+          userMessageId: 'user-restart-recovering',
+          baselineAssistantMessageId: 'assistant-before-restart-recovering',
+          url: 'https://chatgpt.test/workspace/c/restart-recovering',
+        },
+        acceptedAssistantStartMessageId: 'assistant-restart-recovering',
+        acceptedAssistantMessageId: 'assistant-restart-recovering',
+        reconciliationRequired: true,
+        reconciliationReason: 'assistant_start_observation_timeout',
+        state: 'RECOVERING',
+        revision: 5,
+        result: null,
+      },
+    },
+  };
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker: {},
+    surface: {
+      getUrl: () => 'https://chatgpt.test/workspace/c/restart-recovering',
+      waitForAssistantResult: async (_pane, { marker }) => ({
+        ok: true,
+        generationFinished: true,
+        generationActive: false,
+        terminalSignal: 'recovered_terminal_message',
+        finalActionsObserved: true,
+        stableForMs: 1800,
+        assistantMessageId: 'assistant-restart-recovering',
+        linkedUserMessageId: 'user-restart-recovering',
+        conversationId: 'restart-recovering',
+        url: 'https://chatgpt.test/workspace/c/restart-recovering',
+        text: marker + '\nResultado tardio recuperado depois do restart.',
+      }),
+    },
+    loadState: () => structuredClone(state),
+    saveState: next => { state = structuredClone(next); },
+  });
+
+  const afterConstructor = runtime.getMission(envelope.envelopeId);
+  assert.equal(afterConstructor.state, 'UNVERIFIED');
+  assert.equal(afterConstructor.reconciliationRequired, true);
+  assert.equal(afterConstructor.recoveryResumeRequired, true);
+  assert.equal(runtime.getRecoveryCheckpoint({ pane: 'workspace' }).mutationAllowed, false);
+
+  await runtime.recoverPersistedMissions();
+
+  const recovered = runtime.getMission(envelope.envelopeId);
+  assert.equal(recovered.state, 'COMPLETED');
+  assert.equal(recovered.reconciliationRequired, false);
+  assert.equal(recovered.recoveryResumeRequired, false);
+  assert.equal(recovered.result.assistantMessageId, 'assistant-restart-recovering');
+  assert.equal(runtime.getRecoveryCheckpoint({ pane: 'workspace' }).mutationAllowed, true);
+});
+
+
+test('restart recovery timeout remains fail-closed and keeps same-pane mutations blocked', async () => {
+  const envelope = {
+    schema: 'mcf-mission-envelope/v1',
+    envelopeId: 'env-restart-timeout-blocked',
+    missionId: 'MISSION-RESTART-TIMEOUT-BLOCKED',
+    parentMissionId: 'PARENT-RESTART-TIMEOUT-BLOCKED',
+    required: true,
+    createdAt: '2026-09-24T16:00:00.000Z',
+    agent: {
+      agentId: 'Sofia',
+      role: 'Arquitetura de Software',
+      pane: 'workspace',
+      contractRef: 'docs/agentes/SOFIA.md',
+      contractDigest: canonical[1].contractDigest,
+    },
+    session: { sessionId: 'session-sofia', traceId: 'trace-sofia' },
+    authority: { human: 'LEANDRO', orchestrator: 'MESTRE' },
+    objective: 'Manter recovery bloqueado após timeout.',
+    inputs: [],
+    constraints: [],
+    expectedOutputs: [],
+  };
+  let state = {
+    schema: 'mcf-pane-agent-runtime/v1',
+    version: 2,
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    bindings: {},
+    receipts: [],
+    missions: {
+      [envelope.envelopeId]: {
+        schema: 'mcf-agent-mission-execution/v1',
+        envelopeId: envelope.envelopeId,
+        missionId: envelope.missionId,
+        parentMissionId: envelope.parentMissionId,
+        required: true,
+        executionId: 'exec-restart-timeout-blocked',
+        agentId: 'Sofia',
+        role: 'Arquitetura de Software',
+        pane: 'workspace',
+        sessionId: 'session-sofia',
+        traceId: 'trace-sofia',
+        contractRef: 'docs/agentes/SOFIA.md',
+        contractDigest: canonical[1].contractDigest,
+        envelopeDigest: 'd'.repeat(64),
+        envelope,
+        acceptanceMarker: 'MCF_MISSION_ACCEPTED envelope_id=env-restart-timeout-blocked agent_id=Sofia',
+        delivery: {
+          userMessageId: 'user-restart-timeout-blocked',
+          baselineAssistantMessageId: 'assistant-before-restart-timeout-blocked',
+          url: 'https://chatgpt.test/workspace/c/restart-timeout-blocked',
+        },
+        acceptedAssistantStartMessageId: 'assistant-restart-timeout-blocked',
+        acceptedAssistantMessageId: 'assistant-restart-timeout-blocked',
+        reconciliationRequired: true,
+        reconciliationReason: 'assistant_start_observation_timeout',
+        state: 'RECOVERING',
+        revision: 5,
+        result: null,
+      },
+    },
+  };
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker: {},
+    surface: {
+      getUrl: () => 'https://chatgpt.test/workspace/c/restart-timeout-blocked',
+      waitForAssistantResult: async () => ({
+        ok: false,
+        generationFinished: false,
+        generationActive: true,
+        terminalSignal: 'result_timeout',
+      }),
+    },
+    loadState: () => structuredClone(state),
+    saveState: next => { state = structuredClone(next); },
+  });
+
+  await runtime.recoverPersistedMissions();
+  const blocked = runtime.getMission(envelope.envelopeId);
+  assert.equal(blocked.state, 'UNVERIFIED');
+  assert.equal(blocked.reconciliationRequired, true);
+  assert.equal(blocked.reconciliationReason, 'result_recovery_timeout');
+  assert.equal(blocked.recoveryResumeRequired, false);
+  assert.equal(runtime.getRecoveryCheckpoint({ pane: 'workspace' }).mutationAllowed, false);
+});
+
+
+test('stale thinking activity expires its lease and fails closed without endless start retries', async () => {
+  let state = null;
+  let startCalls = 0;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/stale-lease',
+    freshConversation: async () => {},
+    waitForAssistantMarker: async () => true,
+    sendMessage: async pane => ({
+      ok: true,
+      pane,
+      deliveryConfirmed: true,
+      composerCleared: true,
+      conversationAdvanced: true,
+      userMessageId: 'user-stale-lease',
+      baselineAssistantMessageId: 'assistant-before-stale-lease',
+      url: 'https://chatgpt.test/' + pane + '/c/stale-lease',
+    }),
+    waitForAssistantStart: async () => {
+      startCalls += 1;
+      return {
+        ok: false,
+        accepted: false,
+        generationActive: false,
+        activityObserved: true,
+        positiveActivityObserved: true,
+        lastActivityAt: Date.now() - 5000,
+        error: 'assistant_start_timeout',
+      };
+    },
+  };
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+    activityLeaseMs: 250,
+    assistantStartHardTimeoutMs: 1500,
+  });
+  await runtime.bootstrap();
+  const dispatched = await runtime.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'MISSION-STALE-LEASE',
+    parentMissionId: 'PARENT-STALE-LEASE',
+    objective: 'Expirar sinal stale de thinking/tooling.',
+  });
+  await runtime.waitForPendingMissions();
+  const mission = runtime.getMission(dispatched.envelope.envelopeId);
+  assert.equal(startCalls, 1);
+  assert.equal(mission.state, 'UNVERIFIED');
+  assert.equal(mission.reconciliationRequired, true);
+  assert.equal(mission.reconciliationReason, 'assistant_activity_lease_expired');
+  assert.equal(runtime.getRecoveryCheckpoint({ pane: 'workspace' }).mutationAllowed, false);
+});
+
+
+test('result observation hard deadline becomes UNVERIFIED and recovery-blocked', async () => {
+  let state = null;
+  let resultCalls = 0;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/result-hard-timeout',
+    freshConversation: async () => {},
+    waitForAssistantMarker: async () => true,
+    sendMessage: async pane => ({
+      ok: true,
+      pane,
+      deliveryConfirmed: true,
+      composerCleared: true,
+      conversationAdvanced: true,
+      userMessageId: 'user-result-hard-timeout',
+      baselineAssistantMessageId: 'assistant-before-result-hard-timeout',
+      url: 'https://chatgpt.test/' + pane + '/c/result-hard-timeout',
+    }),
+    waitForAssistantStart: async () => ({
+      ok: true,
+      accepted: true,
+      assistantMessageId: 'assistant-result-hard-timeout',
+      linkedUserMessageId: 'user-result-hard-timeout',
+      markerObserved: false,
+      generationActive: true,
+    }),
+    waitForAssistantResult: async () => {
+      resultCalls += 1;
+      await new Promise(resolve => setTimeout(resolve, 550));
+      return {
+        ok: false,
+        generationFinished: false,
+        generationActive: true,
+        terminalSignal: 'result_timeout',
+      };
+    },
+  };
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+    resultHardTimeoutMs: 1000,
+  });
+  await runtime.bootstrap();
+  const dispatched = await runtime.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'MISSION-RESULT-HARD-TIMEOUT',
+    parentMissionId: 'PARENT-RESULT-HARD-TIMEOUT',
+    objective: 'Não permitir loop infinito de result observation.',
+  });
+  await runtime.waitForPendingMissions();
+  const mission = runtime.getMission(dispatched.envelope.envelopeId);
+  assert.ok(resultCalls >= 2);
+  assert.equal(mission.state, 'UNVERIFIED');
+  assert.equal(mission.reconciliationRequired, true);
+  assert.equal(mission.reconciliationReason, 'result_hard_timeout');
+  assert.equal(runtime.getRecoveryCheckpoint({ pane: 'workspace' }).mutationAllowed, false);
+});
+
+
+test('assistant start hard deadline stops endlessly fresh activity and requires reconciliation', async () => {
+  let state = null;
+  let startCalls = 0;
+  const broker = {
+    listAgents: async () => canonical,
+    showSession: async sessionId => sessionFor(sessionId.includes('emily') ? 'Emily' : 'Sofia'),
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const surface = {
+    getUrl: pane => 'https://chatgpt.test/' + pane + '/c/start-hard-timeout',
+    freshConversation: async () => {},
+    waitForAssistantMarker: async () => true,
+    sendMessage: async pane => ({
+      ok: true,
+      pane,
+      deliveryConfirmed: true,
+      composerCleared: true,
+      conversationAdvanced: true,
+      userMessageId: 'user-start-hard-timeout',
+      baselineAssistantMessageId: 'assistant-before-start-hard-timeout',
+      url: 'https://chatgpt.test/' + pane + '/c/start-hard-timeout',
+    }),
+    waitForAssistantStart: async () => {
+      startCalls += 1;
+      await new Promise(resolve => setTimeout(resolve, 550));
+      return {
+        ok: false,
+        accepted: false,
+        generationActive: false,
+        activityObserved: true,
+        positiveActivityObserved: true,
+        lastActivityAt: Date.now(),
+        error: 'assistant_start_timeout',
+      };
+    },
+  };
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-CHATGPT-UI-LIFECYCLE-RACE-001',
+    broker,
+    surface,
+    loadState: () => state,
+    saveState: next => { state = structuredClone(next); },
+    activityLeaseMs: 5000,
+    assistantStartHardTimeoutMs: 1000,
+  });
+  await runtime.bootstrap();
+
+  const dispatched = await runtime.dispatchMission({
+    agentId: 'Sofia',
+    missionId: 'MISSION-START-HARD-TIMEOUT',
+    parentMissionId: 'PARENT-START-HARD-TIMEOUT',
+    objective: 'Aplicar hard deadline mesmo com atividade continuamente fresca.',
+  });
+  await runtime.waitForPendingMissions();
+
+  const mission = runtime.getMission(dispatched.envelope.envelopeId);
+  assert.ok(startCalls >= 2);
+  assert.equal(mission.state, 'UNVERIFIED');
+  assert.equal(mission.reconciliationRequired, true);
+  assert.equal(mission.reconciliationReason, 'assistant_start_hard_timeout');
+  assert.equal(runtime.getRecoveryCheckpoint({ pane: 'workspace' }).mutationAllowed, false);
 });

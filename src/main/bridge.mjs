@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'no
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { LiveAgentEventBus } from './live-agent-events.mjs';
+import { isGenerationStopControl } from './generation-control.mjs';
+import { buildRuntimeDiscovery } from './runtime-discovery.mjs';
 
 const MAX_BODY = 1024 * 1024;
 const MAX_MESSAGE = 16000;
@@ -119,6 +121,7 @@ export class LocalAgentBridge {
     captureWorkspace = null,
     openAgentSession = null,
     listAgentSessions = null,
+    listCanonicalAgents = null,
     getAgentIdentities = null,
     bootstrapAgentIdentities = null,
     dispatchAgentMission = null,
@@ -126,6 +129,11 @@ export class LocalAgentBridge {
     listAgentMissions = null,
     getAgentMission = null,
     getParentAgentMissionStatus = null,
+    getAgentRecoveryCheckpoint = null,
+    reconcileAgentMission = null,
+    cancelAgentMission = null,
+    messageComposerReadyTimeoutMs = 30000,
+    messageComposerReadyPollMs = 250,
     onEvent = () => {},
   }) {
     this.getWorkspaceWebContents = getWorkspaceWebContents;
@@ -137,10 +145,12 @@ export class LocalAgentBridge {
     this.agentProfile = agentProfile;
     this.paused = false;
     this.busy = false;
+    this.mutationQueue = [];
     this.uploadDir = uploadDir;
     this.captureWorkspace = captureWorkspace;
     this.openAgentSession = openAgentSession;
     this.listAgentSessions = listAgentSessions;
+    this.listCanonicalAgents = listCanonicalAgents;
     this.getAgentIdentities = getAgentIdentities;
     this.bootstrapAgentIdentities = bootstrapAgentIdentities;
     this.dispatchAgentMission = dispatchAgentMission;
@@ -148,6 +158,15 @@ export class LocalAgentBridge {
     this.listAgentMissions = listAgentMissions;
     this.getAgentMission = getAgentMission;
     this.getParentAgentMissionStatus = getParentAgentMissionStatus;
+    this.getAgentRecoveryCheckpoint = getAgentRecoveryCheckpoint;
+    this.reconcileAgentMission = reconcileAgentMission;
+    this.cancelAgentMission = cancelAgentMission;
+    this.messageComposerReadyTimeoutMs = Number.isFinite(messageComposerReadyTimeoutMs)
+      ? Math.max(0, Number(messageComposerReadyTimeoutMs))
+      : 30000;
+    this.messageComposerReadyPollMs = Number.isFinite(messageComposerReadyPollMs)
+      ? Math.max(1, Number(messageComposerReadyPollMs))
+      : 250;
     this.onEvent = onEvent;
     this.server = null;
     this.port = null;
@@ -165,6 +184,7 @@ export class LocalAgentBridge {
       agentProfile: this.agentProfile,
       paused: this.paused,
       busy: this.busy,
+      queueDepth: this.mutationQueue.length,
       host: '127.0.0.1',
       port: this.port,
       token: this.server ? this.token : null,
@@ -239,6 +259,35 @@ export class LocalAgentBridge {
     return this.server ? this.stop() : this.start();
   }
 
+  #drainMutationQueue() {
+    if (this.busy) return;
+
+    while (this.mutationQueue.length > 0) {
+      const entry = this.mutationQueue.shift();
+      if (entry.req.destroyed || entry.req.aborted || entry.res.destroyed) {
+        entry.resolve(null);
+        continue;
+      }
+
+      this.busy = true;
+      let released = false;
+      entry.resolve(() => {
+        if (released) return;
+        released = true;
+        this.busy = false;
+        this.#drainMutationQueue();
+      });
+      return;
+    }
+  }
+
+  #acquireMutation(req, res) {
+    return new Promise((resolve) => {
+      this.mutationQueue.push({ req, res, resolve });
+      this.#drainMutationQueue();
+    });
+  }
+
   #paneWebContents(target) {
     const pane = normalizePaneTarget(target);
     if (!pane) return { pane: null, wc: null };
@@ -262,6 +311,92 @@ export class LocalAgentBridge {
     if (!pane) return { ok: false, error: 'valid_message_target_required' };
     if (!normalizedMessage) return { ok: false, error: 'valid_message_required' };
     return this.#sendMessage(pane, normalizedMessage);
+  }
+
+  async #messageComposerReadiness(wc) {
+    if (!wc || wc.isDestroyed?.() || typeof wc.executeJavaScript !== 'function') {
+      return {
+        ok: false,
+        composerPresent: false,
+        composerEditable: false,
+        generationActive: false,
+        error: 'message_target_unavailable',
+      };
+    }
+
+    return wc.executeJavaScript(`(() => {
+      const MCF_MESSAGE_COMPOSER_READINESS = true;
+      const isStopControl = ${isGenerationStopControl.toString()};
+      const visible = (el) => {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        return r.width > 20 && r.height > 10
+          && s.display !== 'none'
+          && s.visibility !== 'hidden';
+      };
+      const composer = [
+        document.querySelector('#prompt-textarea'),
+        document.querySelector('textarea'),
+        ...document.querySelectorAll('[contenteditable="true"]'),
+      ].filter(Boolean).find(visible) || null;
+      const stopControl = [...document.querySelectorAll('button')].find(button =>
+        visible(button) && isStopControl({
+          ariaLabel: button.getAttribute('aria-label'),
+          testId: button.getAttribute('data-testid'),
+          title: button.title,
+          text: button.innerText,
+        })
+      ) || null;
+      const composerEditable = Boolean(composer)
+        && composer.getAttribute('aria-disabled') !== 'true'
+        && composer.getAttribute('contenteditable') !== 'false'
+        && composer.disabled !== true
+        && composer.readOnly !== true
+        && (composer.isContentEditable || 'value' in composer);
+      return {
+        ok: Boolean(composer) && composerEditable && !stopControl,
+        composerPresent: Boolean(composer),
+        composerEditable,
+        generationActive: Boolean(stopControl),
+        stopControl: stopControl ? {
+          ariaLabel: stopControl.getAttribute('aria-label') || null,
+          testId: stopControl.getAttribute('data-testid') || null,
+          title: stopControl.title || null,
+        } : null,
+      };
+    })()`, true).catch(error => ({
+      ok: false,
+      composerPresent: false,
+      composerEditable: false,
+      generationActive: false,
+      error: String(error?.message || error),
+    }));
+  }
+
+  async #waitForMessageComposerReady(wc) {
+    const deadline = Date.now() + this.messageComposerReadyTimeoutMs;
+    let last = null;
+
+    do {
+      if (!wc || wc.isDestroyed?.()) {
+        return { ok: false, error: 'message_target_unavailable', readiness: last };
+      }
+
+      last = await this.#messageComposerReadiness(wc);
+      if (last?.ok) return { ok: true, readiness: last };
+      if (Date.now() >= deadline) break;
+
+      await new Promise(resolve => setTimeout(resolve, this.messageComposerReadyPollMs));
+    } while (true);
+
+    return {
+      ok: false,
+      error: last?.generationActive
+        ? 'message_send_blocked_generation_active'
+        : 'chat_composer_not_ready',
+      readiness: last,
+    };
   }
 
   async #cleanupComposerDraft(wc) {
@@ -352,8 +487,19 @@ export class LocalAgentBridge {
       return { ok: false, pane, error: 'message_transport_unavailable' };
     }
 
+    const readiness = await this.#waitForMessageComposerReady(wc);
+    if (!readiness?.ok) {
+      return {
+        ok: false,
+        pane,
+        error: readiness?.error ?? 'chat_composer_not_ready',
+        readiness: readiness?.readiness ?? null,
+      };
+    }
+
     const prepared = await wc.executeJavaScript(`(async () => {
       const enforceChatMode = ${pane === 'chat' ? 'true' : 'false'};
+      const isStopControl = ${isGenerationStopControl.toString()};
       const visible = (el) => {
         if (!el) return false;
         const r = el.getBoundingClientRect();
@@ -410,6 +556,33 @@ export class LocalAgentBridge {
 
       const composer = findComposer();
       if (!composer) return { ok:false, error:'chat_composer_not_found' };
+      const stopControl = [...document.querySelectorAll('button')].find(button =>
+        visible(button) && isStopControl({
+          ariaLabel: button.getAttribute('aria-label'),
+          testId: button.getAttribute('data-testid'),
+          title: button.title,
+          text: button.innerText,
+        })
+      );
+      if (stopControl) {
+        return {
+          ok:false,
+          error:'message_send_blocked_generation_active',
+          generationActive:true,
+        };
+      }
+      const composerEditable = composer.getAttribute('aria-disabled') !== 'true'
+        && composer.getAttribute('contenteditable') !== 'false'
+        && composer.disabled !== true
+        && composer.readOnly !== true
+        && (composer.isContentEditable || 'value' in composer);
+      if (!composerEditable) {
+        return {
+          ok:false,
+          error:'chat_composer_not_ready',
+          generationActive:false,
+        };
+      }
 
       const blockReason = (() => {
         let node = composer;
@@ -459,19 +632,74 @@ export class LocalAgentBridge {
 
     if (!prepared?.ok) return { ok: false, pane, error: prepared?.error || 'message_prepare_failed' };
 
-    await wc.insertText(message);
+    try {
+      await wc.insertText(message);
+    } catch (error) {
+      return {
+        ok: false,
+        pane,
+        error: 'message_native_insert_failed',
+        detail: String(error?.message || error),
+      };
+    }
     await new Promise(resolve => setTimeout(resolve, 120));
 
+    const typed = await wc.executeJavaScript(`(() => {
+      const MCF_MESSAGE_INSERT_VERIFICATION = true;
+      const expected = ${JSON.stringify(message)};
+      const composer = document.querySelector('#prompt-textarea')
+        || document.querySelector('textarea')
+        || document.querySelector('[contenteditable="true"]');
+      const normalize = value => String(value || '').replace(/\\s+/g, ' ').trim();
+      const actual = composer
+        ? normalize(composer.innerText || composer.value || composer.textContent || '')
+        : '';
+      const normalizedExpected = normalize(expected);
+      return {
+        ok: Boolean(composer) && actual === normalizedExpected,
+        composerPresent: Boolean(composer),
+        actualLength: actual.length,
+        expectedLength: normalizedExpected.length,
+      };
+    })()`, true).catch(error => ({
+      ok: false,
+      composerPresent: false,
+      actualLength: null,
+      expectedLength: null,
+      error: String(error?.message || error),
+    }));
+
+    if (!typed?.ok) {
+      return {
+        ok: false,
+        pane,
+        error: 'message_native_insert_not_observed',
+        typed,
+      };
+    }
+
     const sent = await wc.executeJavaScript(`(() => {
+      const isStopControl = ${isGenerationStopControl.toString()};
       const visible = (el) => {
         if (!el) return false;
         const r = el.getBoundingClientRect();
         const s = getComputedStyle(el);
         return r.width > 10 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
       };
-      const direct = document.querySelector('[data-testid="send-button"]');
       const buttons = [...document.querySelectorAll('button')].filter(visible);
-      const send = direct || buttons.find((button) => {
+      const stopControl = buttons.find(button => isStopControl({
+        ariaLabel: button.getAttribute('aria-label'),
+        testId: button.getAttribute('data-testid'),
+        title: button.title,
+        text: button.innerText,
+      }));
+      if (stopControl) {
+        return { ok:false, error:'message_send_blocked_generation_active' };
+      }
+      const direct = document.querySelector('[data-testid="send-button"]');
+      const send = (direct && visible(direct) && !direct.disabled)
+        ? direct
+        : buttons.find((button) => {
         const label = String(button.getAttribute('aria-label') || button.title || button.innerText || '').toLowerCase();
         return (label.includes('send') || label.includes('enviar')) && !button.disabled;
       });
@@ -641,7 +869,7 @@ export class LocalAgentBridge {
   }
 
   async #handle(req, res) {
-    let acquired = false;
+    let releaseMutation = null;
     try {
       if (req.headers.host !== `127.0.0.1:${this.port}` && req.headers.host !== `localhost:${this.port}`) {
         return json(res, 403, { ok: false, error: 'invalid_host' });
@@ -704,11 +932,55 @@ export class LocalAgentBridge {
         return;
       }
 
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/discovery') {
+        const warnings = [];
+        const read = async (source, fn) => {
+          if (typeof fn !== 'function') {
+            warnings.push({ source, error: 'unavailable' });
+            return [];
+          }
+          try {
+            const value = await fn();
+            return Array.isArray(value) ? value : [];
+          } catch (error) {
+            warnings.push({
+              source,
+              error: String(error?.message || error || 'unknown_error'),
+            });
+            return [];
+          }
+        };
+
+        const [paneAgents, agentSessions, canonicalAgents] = await Promise.all([
+          read('paneAgents', this.getAgentIdentities),
+          read('agentSessions', this.listAgentSessions),
+          read('canonicalAgents', this.listCanonicalAgents),
+        ]);
+
+        const discovery = buildRuntimeDiscovery({
+          instanceId: this.instanceId,
+          agentProfile: this.agentProfile,
+          paused: this.paused,
+          busy: this.busy,
+          queueDepth: this.mutationQueue.length,
+          paneAgents,
+          agentSessions,
+          canonicalAgents,
+          warnings,
+        });
+        return json(res, 200, { ok: true, discovery });
+      }
+
       if (req.method === 'POST') {
         if (this.paused) return json(res, 423, { ok: false, error: 'automation_paused' });
-        if (this.busy) return json(res, 409, { ok: false, error: 'automation_busy' });
-        this.busy = true;
-        acquired = true;
+
+        const previousSocketTimeout = req.socket?.timeout ?? 30000;
+        if (req.socket && !req.socket.destroyed) req.socket.setTimeout(0);
+        releaseMutation = await this.#acquireMutation(req, res);
+        if (req.socket && !req.socket.destroyed) req.socket.setTimeout(previousSocketTimeout);
+
+        if (!releaseMutation) return;
+        if (this.paused) return json(res, 423, { ok: false, error: 'automation_paused' });
       }
 
       if (req.method === 'GET' && requestUrl.pathname === '/v1/agent-sessions') {
@@ -755,7 +1027,13 @@ export class LocalAgentBridge {
         }
         const body = await readJson(req);
         const result = await this.bootstrapAgentIdentities(body ?? {});
-        return json(res, result?.ok ? 200 : 422, result ?? { ok: false, error: 'agent_bootstrap_failed' });
+        const recoveryBlocked = Array.isArray(result?.agents)
+          && result.agents.some(item => item?.error === 'pane_recovery_required');
+        return json(
+          res,
+          result?.ok ? 200 : recoveryBlocked ? 409 : 422,
+          result ?? { ok: false, error: 'agent_bootstrap_failed' },
+        );
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/v1/mission-envelope') {
@@ -839,12 +1117,68 @@ export class LocalAgentBridge {
         return json(res, 200, { ok: true, status });
       }
 
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/recovery-checkpoint') {
+        if (typeof this.getAgentRecoveryCheckpoint !== 'function') {
+          return json(res, 503, { ok: false, error: 'agent_lifecycle_runtime_unavailable' });
+        }
+        const rawPane = requestUrl.searchParams.get('pane');
+        const pane = rawPane == null || rawPane === '' ? null : normalizePaneTarget(rawPane);
+        if (rawPane && !pane) {
+          return json(res, 400, { ok: false, error: 'valid_pane_required' });
+        }
+        const checkpoint = await this.getAgentRecoveryCheckpoint({ pane });
+        return json(res, checkpoint?.ok === false ? 422 : 200, checkpoint);
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/mission-reconcile') {
+        if (typeof this.reconcileAgentMission !== 'function') {
+          return json(res, 503, { ok: false, error: 'agent_lifecycle_runtime_unavailable' });
+        }
+        const body = await readJson(req);
+        const result = await this.reconcileAgentMission(body ?? {});
+        const status = result?.ok
+          ? 200
+          : result?.error === 'mission_not_found'
+            ? 404
+            : result?.error === 'mission_not_reconciliation_blocked'
+              ? 409
+              : 422;
+        return json(res, status, result ?? { ok: false, error: 'mission_reconcile_failed' });
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/mission-cancel') {
+        if (typeof this.cancelAgentMission !== 'function') {
+          return json(res, 503, { ok: false, error: 'agent_lifecycle_runtime_unavailable' });
+        }
+        const body = await readJson(req);
+        const result = await this.cancelAgentMission(body ?? {});
+        const status = result?.ok
+          ? 200
+          : result?.error === 'mission_not_found'
+            ? 404
+            : result?.error === 'mission_already_completed'
+              ? 409
+              : 422;
+        return json(res, status, result ?? { ok: false, error: 'mission_cancel_failed' });
+      }
+
       if (req.method === 'POST' && requestUrl.pathname === '/v1/message') {
         const body = await readJson(req);
         const pane = normalizePaneTarget(body?.pane);
         const message = messageInput(body);
         if (!pane) return json(res, 400, { ok: false, error: 'valid_message_target_required' });
         if (!message) return json(res, 400, { ok: false, error: 'valid_message_required' });
+        if (typeof this.getAgentRecoveryCheckpoint === 'function') {
+          const checkpoint = await this.getAgentRecoveryCheckpoint({ pane });
+          if (checkpoint?.recoveryRequired || checkpoint?.mutationAllowed === false) {
+            return json(res, 409, {
+              ok: false,
+              error: 'recovery_required',
+              pane,
+              checkpoint,
+            });
+          }
+        }
         const result = await this.#sendMessage(pane, message);
         const status = result.ok ? 200 : result.error === 'rate_limit_hard_block' ? 429 : 422;
         return json(res, status, result);
@@ -858,6 +1192,23 @@ export class LocalAgentBridge {
         if (!message) return json(res, 400, { ok: false, error: 'valid_message_required' });
         if (!targets.length || targets.length !== rawTargets.length) {
           return json(res, 400, { ok: false, error: 'valid_message_targets_required' });
+        }
+        if (typeof this.getAgentRecoveryCheckpoint === 'function') {
+          const blockers = [];
+          for (const targetPane of targets) {
+            const checkpoint = await this.getAgentRecoveryCheckpoint({ pane: targetPane });
+            if (checkpoint?.recoveryRequired || checkpoint?.mutationAllowed === false) {
+              blockers.push({ pane: targetPane, checkpoint });
+            }
+          }
+          if (blockers.length) {
+            return json(res, 409, {
+              ok: false,
+              error: 'recovery_required',
+              targets,
+              blockers,
+            });
+          }
         }
         const results = await Promise.all(targets.map(target => this.#sendMessage(target, message)));
         const ok = results.every(result => result.ok);
@@ -875,6 +1226,29 @@ export class LocalAgentBridge {
       }
       const { pane, wc } = target;
 
+      const recoveryGuardedPaneMutationRoutes = new Set([
+        '/v1/navigate',
+        '/v1/action',
+        '/v1/find-click',
+        '/v1/click',
+        '/v1/type',
+        '/v1/pointer',
+        '/v1/upload-file',
+      ]);
+      if (req.method === 'POST'
+          && recoveryGuardedPaneMutationRoutes.has(requestUrl.pathname)
+          && typeof this.getAgentRecoveryCheckpoint === 'function') {
+        const checkpoint = await this.getAgentRecoveryCheckpoint({ pane });
+        if (checkpoint?.recoveryRequired || checkpoint?.mutationAllowed === false) {
+          return json(res, 409, {
+            ok: false,
+            error: 'recovery_required',
+            pane,
+            checkpoint,
+          });
+        }
+      }
+
       if (req.method === 'GET' && requestUrl.pathname === '/v1/state') {
         return json(res, 200, {
           ok: true,
@@ -883,6 +1257,7 @@ export class LocalAgentBridge {
             pane,
             paused: this.paused,
             busy: this.busy,
+            queueDepth: this.mutationQueue.length,
             url: wc.getURL(),
             title: wc.getTitle(),
             loading: wc.isLoading(),
@@ -1146,7 +1521,7 @@ export class LocalAgentBridge {
       this.onEvent({ level: 'error', message: `Bridge: ${code}` });
       if (!res.destroyed) return json(res, code === 'invalid_json' ? 400 : 500, { ok: false, error: code });
     } finally {
-      if (acquired) this.busy = false;
+      releaseMutation?.();
     }
   }
 }

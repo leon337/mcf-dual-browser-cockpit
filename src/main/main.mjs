@@ -6,8 +6,9 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LocalAgentBridge } from './bridge.mjs';
 import { PaneAgentRuntime } from './agent-runtime.mjs';
-import { agentBindingsForProfile } from './agent-identity.mjs';
+import { agentBindingsForProfile, agentMissionIdForProfile } from './agent-identity.mjs';
 import { isGenerationStopControl, isTargetGenerationActive } from './generation-control.mjs';
+import { buildAgentSessionDeliveryProbe, isAgentSessionDeliveryConfirmed } from './agent-session-verification.mjs';
 import { instanceConfig, atomicJson } from './instance.mjs';
 
 const instance = instanceConfig(process.argv, app.getPath('userData'));
@@ -43,9 +44,7 @@ let paneAgentRuntime = null;
 let restoredRuntimeState = null;
 let runtimePersistTimer = null;
 const RUNTIME_STATE_VERSION = 1;
-const PANE_AGENT_MISSION_ID = instance.agentProfile === 'debug-engineering'
-  ? 'MCF-DUAL-BROWSER-TEAM-EXPANSION-003'
-  : 'MCF-DUAL-AGENT-IDENTITY-001';
+const PANE_AGENT_MISSION_ID = agentMissionIdForProfile(instance.agentProfile);
 
 const viewState = {
   chat: { url: CHATGPT_URL, title: 'ChatGPT', loading: true, canGoBack: false, canGoForward: false },
@@ -390,6 +389,109 @@ async function freshAgentConversation(pane) {
   return { ok: true, url: wc.getURL() };
 }
 
+async function reconcileFreshAgentConversation(pane) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) {
+    return { ok: false, fresh: false, composerAvailable: false, error: 'pane_unavailable' };
+  }
+
+  const currentUrl = wc.getURL();
+  const target = projectRootForPane(pane);
+  if (currentUrl !== target) {
+    return {
+      ok: false,
+      fresh: false,
+      composerAvailable: false,
+      error: 'fresh_conversation_navigation_unconfirmed',
+      url: currentUrl,
+      target,
+    };
+  }
+
+  const ready = await waitForChatComposer(wc, 3000);
+  return {
+    ok: Boolean(ready),
+    fresh: Boolean(ready),
+    composerAvailable: Boolean(ready),
+    error: ready ? null : 'fresh_conversation_composer_unconfirmed',
+    url: wc.getURL(),
+    target,
+  };
+}
+
+async function inspectIdentityBootstrap(
+  pane,
+  {
+    agentId = null,
+    sessionId = null,
+    contractDigest = null,
+    marker = null,
+    userMessageId = null,
+    expectedConversationUrl = null,
+    expectedProjectRoot = null,
+  } = {},
+) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) {
+    return { ok: false, verified: false, error: 'pane_unavailable' };
+  }
+  if (!agentId || !sessionId || !contractDigest || !marker) {
+    return { ok: false, verified: false, error: 'identity_bootstrap_probe_invalid' };
+  }
+
+  const script = [
+    '(() => {',
+    'const agentId=' + JSON.stringify(agentId) + ';',
+    'const sessionId=' + JSON.stringify(sessionId) + ';',
+    'const contractDigest=' + JSON.stringify(contractDigest) + ';',
+    'const marker=' + JSON.stringify(marker) + ';',
+    'const expectedUserMessageId=' + JSON.stringify(userMessageId) + ';',
+    'const expectedConversationUrl=' + JSON.stringify(expectedConversationUrl) + ';',
+    'const expectedProjectRoot=' + JSON.stringify(expectedProjectRoot) + ';',
+    'const messages=[...document.querySelectorAll("[data-message-author-role]")];',
+    'const users=messages.filter(n=>n.getAttribute("data-message-author-role")==="user");',
+    'const textOf=n=>String(n?.innerText||n?.textContent||"");',
+    'const header="[MCF PANE AGENT IDENTITY]";',
+    'const agentNeedle="agent_id: "+agentId;',
+    'const sessionNeedle="session_id: "+sessionId;',
+    'const digestNeedle="contract_sha256: "+contractDigest;',
+    'const identityAttempts=users.filter(n=>{const t=textOf(n);return t.includes(header)&&t.includes(agentNeedle);});',
+    'const matches=identityAttempts.filter(n=>{const t=textOf(n);return t.includes(sessionNeedle)&&t.includes(digestNeedle);});',
+    'let user=null;',
+    'if(expectedUserMessageId){user=matches.find(n=>n.getAttribute("data-message-id")===expectedUserMessageId)||null;}',
+    'else if(matches.length===1){user=matches[0];}',
+    'const userAnchorFound=Boolean(user);',
+    'const conflictingAttempt=identityAttempts.some(n=>n!==user);',
+    'const userIndex=user?messages.indexOf(user):-1;',
+    'let nextUserIndex=messages.length;',
+    'if(userIndex>=0){for(let i=userIndex+1;i<messages.length;i+=1){if(messages[i].getAttribute("data-message-author-role")==="user"){nextUserIndex=i;break;}}}',
+    'const assistants=userIndex>=0?messages.slice(userIndex+1,nextUserIndex).filter(n=>n.getAttribute("data-message-author-role")==="assistant"):[];',
+    'const markerNode=assistants.find(n=>textOf(n).includes(marker))||null;',
+    'const markerObserved=Boolean(markerNode);',
+    'const url=location.href;',
+    'const conversationUrlOk=!expectedConversationUrl||url===expectedConversationUrl;',
+    'const projectRootOk=!expectedProjectRoot||url===expectedProjectRoot||url.startsWith(expectedProjectRoot.replace(/\/$/,"")+"/");',
+    'const verified=userAnchorFound&&markerObserved&&!conflictingAttempt&&conversationUrlOk&&projectRootOk;',
+    'return {',
+    'ok:true,verified,userAnchorFound,markerObserved,conflictingAttempt,',
+    'matchingUserCount:matches.length,identityAttemptCount:identityAttempts.length,',
+    'conversationUrlOk,projectRootOk,',
+    'userMessageId:user?.getAttribute("data-message-id")||null,',
+    'assistantMessageId:markerNode?.getAttribute("data-message-id")||null,',
+    'url,',
+    'error:verified?null:conflictingAttempt?"identity_bootstrap_conflicting_attempt":!userAnchorFound?"identity_bootstrap_user_anchor_not_found":!markerObserved?"identity_bootstrap_marker_not_linked":!conversationUrlOk?"identity_bootstrap_conversation_mismatch":"identity_bootstrap_project_mismatch"',
+    '};',
+    '})()',
+  ].join('\n');
+
+  return wc.executeJavaScript(script, true).catch(error => ({
+    ok: false,
+    verified: false,
+    error: 'identity_bootstrap_probe_failed',
+    detail: error?.message ?? String(error),
+  }));
+}
+
 async function waitForConversationUrl(pane, timeoutMs = 15000) {
   const wc = getPane(pane);
   if (!wc || wc.isDestroyed()) return null;
@@ -439,6 +541,9 @@ async function waitForAssistantStart(
   }
 
   const deadline = Date.now() + timeoutMs;
+  let positiveActivityObserved = false;
+  let lastActivityAt = null;
+
   while (Date.now() < deadline) {
     if (wc.isDestroyed()) {
       return { ok: false, accepted: false, error: 'pane_destroyed' };
@@ -450,11 +555,44 @@ async function waitForAssistantStart(
         const userMessageId = ${JSON.stringify(userMessageId)};
         const baselineAssistantMessageId = ${JSON.stringify(baselineAssistantMessageId)};
         const isStopControl = ${isGenerationStopControl.toString()};
+        const visible = (el) => {
+          if (!el) return false;
+          const rect = el.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return rect.width > 0 && rect.height > 0
+            && style.display !== 'none'
+            && style.visibility !== 'hidden';
+        };
+        const stopControl = [...document.querySelectorAll('button')].find(button =>
+          visible(button) && isStopControl({
+            ariaLabel: button.getAttribute('aria-label'),
+            testId: button.getAttribute('data-testid'),
+            title: button.title,
+            text: button.innerText,
+          })
+        );
+        const busyObserved = [...document.querySelectorAll('[aria-busy="true"]')].some(visible);
+        const statusText = [...document.querySelectorAll('[role="status"],[aria-live],[data-state="running"]')]
+          .filter(visible)
+          .map(node => String(node.innerText || node.textContent || ''))
+          .join(' ');
+        const activityTextObserved = /pensando|thinking|ferramenta chamada|tool called|tool use|analisando|working|processing|searching|pesquisando/i.test(statusText);
+        const activityObserved = Boolean(stopControl || busyObserved || activityTextObserved);
+
         const allMessages = [...document.querySelectorAll('[data-message-author-role]')];
         const assistants = allMessages.filter(node =>
           node.getAttribute('data-message-author-role') === 'assistant'
         );
-        if (!assistants.length) return { found:false };
+        if (!assistants.length) {
+          return {
+            found:false,
+            generationActive:Boolean(stopControl),
+            activityObserved,
+            busyObserved,
+            activityTextObserved,
+            url:location.href,
+          };
+        }
 
         let candidate = null;
         let linkedUserMessageId = null;
@@ -464,7 +602,17 @@ async function waitForAssistantStart(
             node.getAttribute('data-message-author-role') === 'user'
             && node.getAttribute('data-message-id') === userMessageId
           );
-          if (userIndex < 0) return { found:false, error:'delivered_user_message_not_found' };
+          if (userIndex < 0) {
+            return {
+              found:false,
+              error:'delivered_user_message_not_found',
+              generationActive:Boolean(stopControl),
+              activityObserved,
+              busyObserved,
+              activityTextObserved,
+              url:location.href,
+            };
+          }
           linkedUserMessageId = userMessageId;
           const userNode = allMessages[userIndex];
           const turns = [...document.querySelectorAll('section[data-testid^="conversation-turn-"]')];
@@ -486,6 +634,8 @@ async function waitForAssistantStart(
               interrupted:true,
               linkedUserMessageId,
               interruptionText:nextTurnText.slice(0, 500),
+              generationActive:Boolean(stopControl),
+              activityObserved,
               url:location.href,
             };
           }
@@ -512,34 +662,45 @@ async function waitForAssistantStart(
           candidate = assistants[assistants.length - 1];
         }
 
-        if (!candidate) return { found:false };
+        if (!candidate) {
+          return {
+            found:false,
+            generationActive:Boolean(stopControl),
+            activityObserved,
+            busyObserved,
+            activityTextObserved,
+            url:location.href,
+          };
+        }
         const assistantMessageId = candidate.getAttribute('data-message-id') || null;
-        if (!assistantMessageId) return { found:false };
+        if (!assistantMessageId) {
+          return {
+            found:false,
+            generationActive:Boolean(stopControl),
+            activityObserved,
+            url:location.href,
+          };
+        }
 
         const text = String(candidate.innerText || candidate.textContent || '');
-        const stopControl = [...document.querySelectorAll('button')].find(button => {
-          const rect = button.getBoundingClientRect();
-          if (!(rect.width > 0 && rect.height > 0)) return false;
-          return isStopControl({
-            ariaLabel: button.getAttribute('aria-label'),
-            testId: button.getAttribute('data-testid'),
-            title: button.title,
-            text: button.innerText,
-          });
-        });
-
         return {
           found:true,
           assistantMessageId,
           linkedUserMessageId,
           markerObserved:Boolean(marker && text.includes(marker)),
           generationActive:Boolean(stopControl),
+          activityObserved:Boolean(activityObserved || text.trim()),
           textLength:text.length,
           url:location.href,
         };
       })()`,
       true,
     ).catch(() => null);
+
+    if (snapshot?.generationActive || snapshot?.activityObserved) {
+      positiveActivityObserved = true;
+      lastActivityAt = Date.now();
+    }
 
     if (snapshot?.interrupted) {
       return {
@@ -550,6 +711,10 @@ async function waitForAssistantStart(
         terminalSignal: 'assistant_interrupted',
         linkedUserMessageId: snapshot.linkedUserMessageId ?? userMessageId ?? null,
         interruptionText: snapshot.interruptionText ?? null,
+        generationActive: Boolean(snapshot.generationActive),
+        activityObserved: Boolean(snapshot.activityObserved),
+        positiveActivityObserved,
+        lastActivityAt,
         url: snapshot.url ?? wc.getURL(),
       };
     }
@@ -563,6 +728,9 @@ async function waitForAssistantStart(
         baselineAssistantMessageId,
         markerObserved: Boolean(snapshot.markerObserved),
         generationActive: Boolean(snapshot.generationActive),
+        activityObserved: Boolean(snapshot.activityObserved),
+        positiveActivityObserved,
+        lastActivityAt,
         url: snapshot.url ?? wc.getURL(),
       };
     }
@@ -570,25 +738,14 @@ async function waitForAssistantStart(
     await sleep(250);
   }
 
-  const generationActive = await wc.executeJavaScript(`(() => {
-    const isStopControl = ${isGenerationStopControl.toString()};
-    return [...document.querySelectorAll('button')].some(button => {
-      const rect = button.getBoundingClientRect();
-      if (!(rect.width > 0 && rect.height > 0)) return false;
-      return isStopControl({
-        ariaLabel: button.getAttribute('aria-label'),
-        testId: button.getAttribute('data-testid'),
-        title: button.title,
-        text: button.innerText,
-      });
-    });
-  })()`, true).catch(() => false);
-
   return {
     ok: false,
     accepted: false,
     error: 'assistant_start_timeout',
-    generationActive: Boolean(generationActive),
+    generationActive: false,
+    activityObserved: positiveActivityObserved,
+    positiveActivityObserved,
+    lastActivityAt,
     linkedUserMessageId: userMessageId ?? null,
     baselineAssistantMessageId,
     url: wc.getURL(),
@@ -953,6 +1110,274 @@ async function waitForAssistantResult(
   };
 }
 
+
+function conversationIdFromUrl(value) {
+  try {
+    return new URL(String(value || '')).pathname.match(/\/c\/([^/]+)/)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function recoverMissionDelivery(
+  pane,
+  {
+    envelopeId = null,
+    missionId = null,
+  } = {},
+) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) {
+    return { ok: false, error: 'pane_unavailable' };
+  }
+  const script = [
+    '(() => {',
+    'const envelopeId=' + JSON.stringify(envelopeId) + ';',
+    'const missionId=' + JSON.stringify(missionId) + ';',
+    'if (!envelopeId) return {ok:false,error:"envelope_id_required"};',
+    'const messages=[...document.querySelectorAll("[data-message-author-role]")];',
+    'const users=messages.filter(n=>n.getAttribute("data-message-author-role")==="user");',
+    'const envelopeNeedle="\"envelopeId\": \""+envelopeId+"\"";',
+    'const missionNeedle=missionId ? "\"missionId\": \""+missionId+"\"" : null;',
+    'const matches=users.filter(n=>{const t=String(n.innerText||n.textContent||""); return t.includes("[MCF MISSION ENVELOPE]") && t.includes(envelopeNeedle) && (!missionNeedle || t.includes(missionNeedle));});',
+    'if (matches.length!==1) return {ok:false,error:matches.length?"mission_delivery_anchor_ambiguous":"mission_delivery_anchor_not_found",matchCount:matches.length,url:location.href};',
+    'const user=matches[0];',
+    'const userMessageId=user.getAttribute("data-message-id")||null;',
+    'const idx=messages.indexOf(user);',
+    'let baselineAssistantMessageId=null;',
+    'for(let i=idx-1;i>=0;i-=1){if(messages[i].getAttribute("data-message-author-role")==="assistant"){baselineAssistantMessageId=messages[i].getAttribute("data-message-id")||null;break;}}',
+    'return {ok:Boolean(userMessageId),recovered:true,userMessageId,baselineAssistantMessageId,url:location.href};',
+    '})()',
+  ].join('\n');
+  return wc.executeJavaScript(script, true).catch(error => ({
+    ok: false,
+    error: 'mission_delivery_anchor_recovery_failed',
+    detail: error?.message ?? String(error),
+  }));
+}
+
+
+async function inspectMissionExecution(
+  pane,
+  {
+    expectedConversationUrl = null,
+    userMessageId = null,
+    assistantMessageId = null,
+  } = {},
+) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) {
+    return { ok: false, verified: false, error: 'pane_unavailable' };
+  }
+
+  const currentUrl = wc.getURL();
+  const expectedConversationId = conversationIdFromUrl(expectedConversationUrl);
+  const currentConversationId = conversationIdFromUrl(currentUrl);
+  if (expectedConversationId && currentConversationId !== expectedConversationId) {
+    return {
+      ok: false,
+      verified: false,
+      error: 'reconciliation_conversation_mismatch',
+      expectedConversationId,
+      currentConversationId,
+      url: currentUrl,
+    };
+  }
+
+  const script = [
+    '(() => {',
+    'const userMessageId = ' + JSON.stringify(userMessageId) + ';',
+    'const expectedAssistantMessageId = ' + JSON.stringify(assistantMessageId) + ';',
+    'const visible = (el) => { if (!el) return false; const r=el.getBoundingClientRect(); const s=getComputedStyle(el); return r.width>0 && r.height>0 && s.display!=="none" && s.visibility!=="hidden"; };',
+    'const stopControl = [...document.querySelectorAll("button")].find(button => {',
+    '  if (!visible(button)) return false;',
+    '  const aria=String(button.getAttribute("aria-label")||"");',
+    '  const testId=String(button.getAttribute("data-testid")||"");',
+    '  const title=String(button.title||"");',
+    '  const text=String(button.innerText||"");',
+    '  return /parar de responder|stop generating|stop responding|parar geração/i.test(aria+" "+title+" "+text) || /stop-button/i.test(testId);',
+    '});',
+    'const busyObserved = [...document.querySelectorAll("[aria-busy=true]")].some(visible);',
+    'const statusText = [...document.querySelectorAll("[role=status],[aria-live],[data-state=running]")].filter(visible).map(n=>String(n.innerText||n.textContent||"")).join(" ");',
+    'const activityTextObserved = /pensando|thinking|ferramenta chamada|tool called|tool use|analisando|working|processing|searching|pesquisando/i.test(statusText);',
+    'const activeExecution = Boolean(stopControl || busyObserved || activityTextObserved);',
+    'const allMessages=[...document.querySelectorAll("[data-message-author-role]")];',
+    'let userAnchorFound = userMessageId == null;',
+    'let assistantAfterUser = null;',
+    'if (userMessageId) {',
+    '  const userIndex=allMessages.findIndex(n=>n.getAttribute("data-message-author-role")==="user" && n.getAttribute("data-message-id")===userMessageId);',
+    '  userAnchorFound=userIndex>=0;',
+    '  if (userAnchorFound) { for (let i=userIndex+1;i<allMessages.length;i+=1) { const role=allMessages[i].getAttribute("data-message-author-role"); if (role==="user") break; if (role==="assistant") { assistantAfterUser=allMessages[i]; break; } } }',
+    '} else if (expectedAssistantMessageId) {',
+    '  assistantAfterUser=allMessages.find(n=>n.getAttribute("data-message-author-role")==="assistant" && n.getAttribute("data-message-id")===expectedAssistantMessageId) || null;',
+    '}',
+    'const observedAssistantMessageId=assistantAfterUser?.getAttribute("data-message-id")||null;',
+    'const assistantText=String(assistantAfterUser?.innerText||assistantAfterUser?.textContent||"").trim();',
+    'const lateResultObserved=Boolean(observedAssistantMessageId && assistantText);',
+    'const targetUser=userMessageId ? allMessages.find(n=>n.getAttribute("data-message-author-role")==="user" && n.getAttribute("data-message-id")===userMessageId) : null;',
+    'const nextUser=targetUser ? allMessages.slice(allMessages.indexOf(targetUser)+1).find(n=>n.getAttribute("data-message-author-role")==="user") : null;',
+    'const turns=[...document.querySelectorAll("section[data-testid^=conversation-turn-]")];',
+    'const startTurn=targetUser?.closest("section[data-testid^=conversation-turn-]")||null;',
+    'const endTurn=nextUser?.closest("section[data-testid^=conversation-turn-]")||null;',
+    'const startIdx=startTurn ? turns.indexOf(startTurn) : -1;',
+    'const endIdx=endTurn ? turns.indexOf(endTurn) : turns.length;',
+    'const executionText=startIdx>=0 ? turns.slice(startIdx+1,endIdx).map(n=>String(n.innerText||n.textContent||"")).join(" ") : "";',
+    'const toolActivityObserved=/ferramenta chamada|tool called|tool use|usou ferramenta|executando ferramenta|running tool/i.test(executionText);',
+    'return {ok:true,verified:true,activeExecution,generationActive:Boolean(stopControl),busyObserved,activityTextObserved,toolActivityObserved,userAnchorFound,lateResultObserved,assistantMessageId:observedAssistantMessageId,assistantTextLength:assistantText.length,url:location.href};',
+    '})()',
+  ].join('\n');
+
+  const snapshot = await wc.executeJavaScript(script, true).catch(error => ({
+    ok: false,
+    verified: false,
+    error: 'reconciliation_observation_failed',
+    detail: error?.message ?? String(error),
+  }));
+
+  return {
+    ...snapshot,
+    expectedConversationId,
+    currentConversationId,
+    url: snapshot?.url ?? currentUrl,
+  };
+}
+
+async function cancelAssistantGeneration(
+  pane,
+  {
+    expectedConversationUrl = null,
+    expectedUserMessageId = null,
+    envelopeId = null,
+    executionId = null,
+  } = {},
+) {
+  const wc = getPane(pane);
+  if (!wc || wc.isDestroyed()) {
+    return {
+      ok: false,
+      requested: false,
+      error: 'pane_unavailable',
+      envelopeId,
+      executionId,
+    };
+  }
+
+  const currentUrl = wc.getURL();
+  const expectedConversationId = conversationIdFromUrl(expectedConversationUrl);
+  const currentConversationId = conversationIdFromUrl(currentUrl);
+  if (expectedConversationId && currentConversationId !== expectedConversationId) {
+    return {
+      ok: false,
+      requested: false,
+      error: 'cancel_conversation_mismatch',
+      expectedConversationId,
+      currentConversationId,
+      url: currentUrl,
+      envelopeId,
+      executionId,
+    };
+  }
+
+  const clicked = await wc.executeJavaScript(
+    `(() => {
+      const isStopControl = ${isGenerationStopControl.toString()};
+      const visible = (el) => {
+        if (!el) return false;
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return rect.width > 0 && rect.height > 0
+          && style.display !== 'none'
+          && style.visibility !== 'hidden';
+      };
+      const expectedUserMessageId = ${JSON.stringify(expectedUserMessageId)};
+      if (expectedUserMessageId) {
+        const userMessages = [...document.querySelectorAll('[data-message-author-role="user"]')];
+        const lastUserMessageId = userMessages.at(-1)?.getAttribute('data-message-id') || null;
+        if (lastUserMessageId !== expectedUserMessageId) {
+          return {
+            ok:false,
+            error:'cancel_user_turn_mismatch',
+            expectedUserMessageId,
+            lastUserMessageId,
+            url:location.href,
+          };
+        }
+      }
+      const controls = [...document.querySelectorAll('button')].filter(button =>
+        visible(button) && isStopControl({
+          ariaLabel: button.getAttribute('aria-label'),
+          testId: button.getAttribute('data-testid'),
+          title: button.title,
+          text: button.innerText,
+        })
+      );
+      if (controls.length !== 1) {
+        return {
+          ok:false,
+          error:controls.length === 0
+            ? 'generation_stop_control_not_found'
+            : 'generation_stop_control_ambiguous',
+          candidates:controls.length,
+          url:location.href,
+        };
+      }
+      controls[0].click();
+      return {ok:true, requested:true, url:location.href};
+    })()`,
+    true,
+  ).catch(error => ({
+    ok: false,
+    requested: false,
+    error: 'cancel_signal_execution_failed',
+    detail: error?.message ?? String(error),
+  }));
+
+  if (!clicked?.ok) {
+    return {
+      ...clicked,
+      requested: false,
+      envelopeId,
+      executionId,
+    };
+  }
+
+  let generationInactiveObserved = false;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await sleep(250);
+    generationInactiveObserved = await wc.executeJavaScript(
+      `(() => {
+        const isStopControl = ${isGenerationStopControl.toString()};
+        return ![...document.querySelectorAll('button')].some(button => {
+          const rect = button.getBoundingClientRect();
+          const style = getComputedStyle(button);
+          if (!(rect.width > 0 && rect.height > 0)
+              || style.display === 'none'
+              || style.visibility === 'hidden') return false;
+          return isStopControl({
+            ariaLabel: button.getAttribute('aria-label'),
+            testId: button.getAttribute('data-testid'),
+            title: button.title,
+            text: button.innerText,
+          });
+        });
+      })()`,
+      true,
+    ).catch(() => false);
+    if (generationInactiveObserved) break;
+  }
+
+  return {
+    ok: true,
+    requested: true,
+    generationInactiveObserved,
+    cancellationConfirmed: false,
+    reconciliationRequired: true,
+    url: wc.getURL(),
+    envelopeId,
+    executionId,
+  };
+}
+
 function createPaneAgentIdentityRuntime() {
   const broker = {
     listAgents: async () => {
@@ -984,6 +1409,7 @@ function createPaneAgentIdentityRuntime() {
       return wc && !wc.isDestroyed() ? wc.getURL() : null;
     },
     freshConversation: freshAgentConversation,
+    reconcileFreshConversation: reconcileFreshAgentConversation,
     sendMessage: async (pane, message) => {
       if (!bridge) return { ok: false, error: 'bridge_unavailable' };
       const result = await bridge.sendMessage(pane, message);
@@ -992,8 +1418,12 @@ function createPaneAgentIdentityRuntime() {
       return { ...result, url };
     },
     waitForAssistantMarker,
+    inspectIdentityBootstrap,
     waitForAssistantStart,
     waitForAssistantResult,
+    recoverMissionDelivery,
+    inspectMissionExecution,
+    cancelAssistantGeneration,
   };
 
   return new PaneAgentRuntime({
@@ -1172,25 +1602,30 @@ async function injectAgentBootstrap(wc, bootstrap) {
   if (!sent?.ok) return sent ?? { ok: false, error: 'chat_send_failed' };
 
   const sessionId = bootstrap.match(/^session_id:\s*(\S+)/m)?.[1] || '';
-  const deadline = Date.now() + 30000;
-  while (Date.now() < deadline) {
-    const evidence = await wc.executeJavaScript(`(() => {
-      const body = document.body?.innerText || '';
-      return {
-        path: location.pathname,
-        title: document.title,
-        hasSession: ${JSON.stringify(sessionId)} ? body.includes(${JSON.stringify(sessionId)}) : false,
-        hasUserTurn: body.includes('You said:') || body.includes('Você disse:') || body.includes('[MCF AGENT SESSION]')
-      };
-    })()`, true).catch(() => null);
+  if (!sessionId) {
+    return { ok: false, error: 'agent_session_id_missing', typed, sent };
+  }
 
-    if (evidence && (String(evidence.path || '').startsWith('/c/') || (evidence.hasSession && evidence.hasUserTurn))) {
+  const probeScript = buildAgentSessionDeliveryProbe(sessionId);
+  const deadline = Date.now() + 30000;
+  let lastEvidence = null;
+  while (Date.now() < deadline) {
+    const evidence = await wc.executeJavaScript(probeScript, true).catch(() => null);
+    lastEvidence = evidence;
+
+    if (isAgentSessionDeliveryConfirmed(evidence)) {
       return { ok: true, typed, sent, evidence };
     }
     await sleep(500);
   }
 
-  return { ok: false, error: 'chat_conversation_not_created', typed, sent };
+  return {
+    ok: false,
+    error: 'chat_conversation_not_created',
+    typed,
+    sent,
+    evidence: lastEvidence,
+  };
 }
 
 async function markAgentSessionOpen(sessionId, chatUrl) {
@@ -1455,6 +1890,10 @@ function createWindow() {
     captureWorkspace,
     openAgentSession,
     listAgentSessions,
+    listCanonicalAgents: async () => {
+      const result = await runAgentSessionTool(['list']);
+      return Array.isArray(result?.agents) ? result.agents : [];
+    },
     getAgentIdentities: async () => paneAgentRuntime?.getIdentities() ?? [],
     bootstrapAgentIdentities: async (input) => {
       if (!paneAgentRuntime) return { ok: false, error: 'agent_identity_runtime_unavailable' };
@@ -1470,6 +1909,18 @@ function createWindow() {
     getParentAgentMissionStatus: async (missionId) => (
       paneAgentRuntime?.getParentMissionStatus(missionId)
       ?? { parentMissionId: missionId, required: 0, completed: 0, active: 0, closable: false, blockers: [] }
+    ),
+    getAgentRecoveryCheckpoint: async (input) => (
+      paneAgentRuntime?.getRecoveryCheckpoint(input ?? {})
+      ?? { ok: false, error: 'agent_lifecycle_runtime_unavailable' }
+    ),
+    reconcileAgentMission: async (input) => (
+      paneAgentRuntime?.reconcileMission(input ?? {})
+      ?? { ok: false, error: 'agent_lifecycle_runtime_unavailable' }
+    ),
+    cancelAgentMission: async (input) => (
+      await paneAgentRuntime?.requestMissionCancellation(input ?? {})
+      ?? { ok: false, error: 'agent_lifecycle_runtime_unavailable' }
     ),
     onEvent: emitBridgeEvent,
   });
