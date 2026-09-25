@@ -11,6 +11,7 @@ import { isGenerationStopControl, isTargetGenerationActive } from './generation-
 import { buildAgentSessionDeliveryProbe, isAgentSessionDeliveryConfirmed } from './agent-session-verification.mjs';
 import { buildAssistantMarkerProbe, buildIdentityBootstrapProbe } from './identity-bootstrap-verification.mjs';
 import { buildRestoreSafeStartupPlan } from './startup-policy.mjs';
+import { isFreshConversationSurface } from './fresh-conversation-policy.mjs';
 import { instanceConfig, atomicJson } from './instance.mjs';
 
 const instance = instanceConfig(process.argv, app.getPath('userData'));
@@ -385,21 +386,42 @@ async function freshAgentConversation(pane) {
   const wc = getPane(pane);
   if (!wc || wc.isDestroyed()) throw new Error('pane_unavailable');
   const target = projectRootForPane(pane);
-  if (wc.getURL() !== target) await wc.loadURL(target);
+
+  if (!isFreshConversationSurface(wc.getURL(), target)) {
+    try {
+      await wc.loadURL(target);
+    } catch (error) {
+      const message = String(error?.message || error || '');
+      const transient = message.includes('ERR_ABORTED') || message.includes('(-3)');
+      if (!transient) throw error;
+
+      const reconciled = await reconcileFreshAgentConversation(pane, target);
+      if (reconciled?.ok
+          && reconciled?.fresh === true
+          && reconciled?.composerAvailable === true) {
+        return {
+          ...reconciled,
+          recoveredAfterUnconfirmedNavigation: true,
+        };
+      }
+      throw error;
+    }
+  }
+
   const ready = await waitForChatComposer(wc, 30000);
   if (!ready) throw new Error('chat_composer_not_found');
-  return { ok: true, url: wc.getURL() };
+  return { ok: true, url: wc.getURL(), target };
 }
 
-async function reconcileFreshAgentConversation(pane) {
+async function reconcileFreshAgentConversation(pane, expectedTarget = null) {
   const wc = getPane(pane);
   if (!wc || wc.isDestroyed()) {
     return { ok: false, fresh: false, composerAvailable: false, error: 'pane_unavailable' };
   }
 
   const currentUrl = wc.getURL();
-  const target = projectRootForPane(pane);
-  if (currentUrl !== target) {
+  const target = expectedTarget || projectRootForPane(pane);
+  if (!isFreshConversationSurface(currentUrl, target)) {
     return {
       ok: false,
       fresh: false,
