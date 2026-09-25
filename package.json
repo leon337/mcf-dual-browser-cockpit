@@ -15,7 +15,7 @@
     "dist": "electron-builder",
     "dist:win": "electron-builder --win nsis portable",
     "dist:linux": "electron-builder --linux AppImage",
-    "check": "node --check src/main/main.mjs && node --check src/main/bridge.mjs && node --check src/main/agent-runtime.mjs && node --check src/main/agent-session-verification.mjs && node --check src/main/runtime-discovery.mjs && node --check src/main/startup-policy.mjs && node --check src/main/generation-control.mjs && node --check src/main/live-agent-events.mjs && node --check src/renderer/renderer.js && node --check src/preload/preload.cjs",
+    "check": "node --check src/main/main.mjs && node --check src/main/bridge.mjs && node --check src/main/agent-runtime.mjs && node --check src/main/agent-session-verification.mjs && node --check src/main/identity-bootstrap-verification.mjs && node --check src/main/runtime-discovery.mjs && node --check src/main/startup-policy.mjs && node --check src/main/generation-control.mjs && node --check src/main/live-agent-events.mjs && node --check src/renderer/renderer.js && node --check src/preload/preload.cjs",
     "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {
