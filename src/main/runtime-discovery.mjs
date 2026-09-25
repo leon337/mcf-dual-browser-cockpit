@@ -1,16 +1,10 @@
-export const RUNTIME_DISCOVERY_SCHEMA = 'mcf-dual-browser-runtime-discovery/v1';
+import { conversationIdFromChatUrl } from './startup-policy.mjs';
 
-function conversationIdFromUrl(value) {
-  try {
-    return new URL(String(value || '')).pathname.match(/\/c\/([^/]+)/)?.[1] ?? null;
-  } catch {
-    return null;
-  }
-}
+export const RUNTIME_DISCOVERY_SCHEMA = 'mcf-dual-browser-runtime-discovery/v1';
 
 function normalizeAgentSession(session) {
   const chatUrl = session?.chatUrl ?? null;
-  const conversationId = conversationIdFromUrl(chatUrl);
+  const conversationId = conversationIdFromChatUrl(chatUrl);
   const deliveryVerified = Boolean(
     session?.bootstrapSent
       && conversationId
@@ -28,6 +22,17 @@ function normalizeAgentSession(session) {
   };
 }
 
+function normalizePaneState(state) {
+  const url = state?.url ?? null;
+  return {
+    pane: state?.pane ?? null,
+    url,
+    title: state?.title ?? null,
+    loading: Boolean(state?.loading),
+    conversationId: conversationIdFromChatUrl(url),
+  };
+}
+
 export function buildRuntimeDiscovery({
   instanceId,
   agentProfile,
@@ -35,10 +40,32 @@ export function buildRuntimeDiscovery({
   busy = false,
   queueDepth = 0,
   paneAgents = [],
+  paneStates = [],
   agentSessions = [],
   canonicalAgents = [],
   warnings = [],
 } = {}) {
+  const normalizedPanes = Array.isArray(paneStates)
+    ? paneStates.map(normalizePaneState)
+    : [];
+  const normalizedPaneAgents = Array.isArray(paneAgents) ? paneAgents : [];
+  const combinedWarnings = Array.isArray(warnings) ? [...warnings] : [];
+
+  for (const agent of normalizedPaneAgents) {
+    const pane = normalizedPanes.find(item => item.pane === agent?.pane);
+    if (!pane?.conversationId) continue;
+    if (agent?.state === 'READY' && agent?.handshakeVerified === true) continue;
+    combinedWarnings.push({
+      source: 'paneIdentity',
+      warning: 'identity_not_ready_conversation_preserved',
+      pane: agent?.pane ?? null,
+      agentId: agent?.agentId ?? null,
+      state: agent?.state ?? null,
+      lastError: agent?.lastError ?? null,
+      conversationId: pane.conversationId,
+    });
+  }
+
   return {
     schema: RUNTIME_DISCOVERY_SCHEMA,
     authority: {
@@ -54,6 +81,7 @@ export function buildRuntimeDiscovery({
     },
     startupProtocol: [
       'Read /v1/discovery before dispatching work.',
+      'Preserve restored /c/<conversation-id> panes; startup must not mutate them automatically.',
       'Use pane agents for the two identity-bound panes of this instance.',
       'Use Agent Session only when an independent ChatGPT window/session is required.',
       'Treat composer text as a draft, never as delivery evidence.',
@@ -62,6 +90,11 @@ export function buildRuntimeDiscovery({
     mechanisms: {
       paneAgents: {
         purpose: 'Two persistent identity-bound panes per Dual Browser instance.',
+        startupPolicy: {
+          restoredConversationHasPriority: true,
+          autoBootstrapOnRestoredConversation: false,
+          explicitBootstrapRoute: 'POST /v1/agents/bootstrap',
+        },
         routes: {
           list: 'GET /v1/agents',
           bootstrap: 'POST /v1/agents/bootstrap',
@@ -116,14 +149,19 @@ export function buildRuntimeDiscovery({
         draftOnly: 'NOT_CREATED',
         confirmed: 'matching user turn + cleared bootstrap draft + /c/<conversation-id>',
       },
+      restoredConversation: {
+        preserveOnStartup: true,
+        identityNotReadyDoesNotAuthorizeImplicitBootstrap: true,
+      },
     },
     current: {
-      paneAgents: Array.isArray(paneAgents) ? paneAgents : [],
+      panes: normalizedPanes,
+      paneAgents: normalizedPaneAgents,
       canonicalAgents: Array.isArray(canonicalAgents) ? canonicalAgents : [],
       agentSessions: Array.isArray(agentSessions)
         ? agentSessions.map(normalizeAgentSession)
         : [],
     },
-    warnings: Array.isArray(warnings) ? warnings : [],
+    warnings: combinedWarnings,
   };
 }

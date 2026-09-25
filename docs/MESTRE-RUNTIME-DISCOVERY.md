@@ -125,3 +125,24 @@ Novo mecanismo do Dual Browser só está pronto para uso geral quando:
 3. possui teste de regressão;
 4. está documentado neste runbook;
 5. não depende de memória de um chat anterior para ser descoberto.
+
+## Persistência e reinício
+
+Cada instância persiste os URLs de `chat` e `workspace` em `runtime-state.json`.
+
+Quando um URL persistido contém uma conversa real `/c/<conversation-id>`, o startup deve:
+
+1. restaurar a conversa;
+2. preservar o URL;
+3. **não** executar bootstrap de identidade automaticamente nesse pane;
+4. expor separadamente no discovery o estado da conversa e o estado do lifecycle de identidade.
+
+Portanto, uma conversa pode estar corretamente restaurada enquanto `paneAgents[].state` ainda está `ERROR`, `RECONCILING` ou `UNVERIFIED`. Isso não autoriza promover a identidade a `READY`.
+
+O discovery expõe:
+
+- `current.panes[].conversationId` — conversa realmente aberta;
+- `current.paneAgents[]` — estado do lifecycle de identidade;
+- warning `identity_not_ready_conversation_preserved` quando a conversa foi preservada mas o binding não está READY.
+
+Bootstrap explícito continua disponível em `POST /v1/agents/bootstrap`, porém deve ser tratado como ação potencialmente mutante da superfície e não deve ser disparado automaticamente somente por reinício.

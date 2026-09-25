@@ -5,26 +5,38 @@ import os from 'node:os';
 import path from 'node:path';
 import { LocalAgentBridge } from '../src/main/bridge.mjs';
 
-test('GET /v1/discovery exposes mechanisms and current runtime inventory', async t => {
+test('GET /v1/discovery exposes mechanisms, pane conversations and runtime inventory', async t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'mcf-discovery-'));
-  const wc = {
-    isDestroyed: () => false,
-    getURL: () => 'https://chatgpt.com/',
-    getTitle: () => 'fixture',
-    isLoading: () => false,
-    navigationHistory: {
-      canGoBack: () => false,
-      canGoForward: () => false,
-    },
-  };
+
+  function wcFor(pane) {
+    const url = pane === 'workspace'
+      ? 'https://chatgpt.com/g/g-rafael/c/rafael-restored'
+      : 'https://chatgpt.com/g/g-patricia/c/patricia-restored';
+    return {
+      isDestroyed: () => false,
+      getURL: () => url,
+      getTitle: () => pane,
+      isLoading: () => false,
+      navigationHistory: {
+        canGoBack: () => false,
+        canGoForward: () => false,
+      },
+    };
+  }
 
   const bridge = new LocalAgentBridge({
-    getWorkspaceWebContents: () => wc,
-    getPaneWebContents: () => wc,
+    getWorkspaceWebContents: () => wcFor('workspace'),
+    getPaneWebContents: pane => wcFor(pane),
     captureDir: dir,
     instanceId: 'notebook-team2',
     agentProfile: 'debug-engineering',
-    getAgentIdentities: async () => [{ agentId: 'Rafael', pane: 'workspace' }],
+    getAgentIdentities: async () => [{
+      agentId: 'Rafael',
+      pane: 'workspace',
+      state: 'ERROR',
+      handshakeVerified: false,
+      lastError: 'identity_bootstrap_reconciliation_required',
+    }],
     listCanonicalAgents: async () => [{ agentId: 'Rafael' }, { agentId: 'Carmem' }],
     listAgentSessions: async () => [{
       sessionId: 'legacy',
@@ -52,9 +64,19 @@ test('GET /v1/discovery exposes mechanisms and current runtime inventory', async
   assert.equal(body.discovery.schema, 'mcf-dual-browser-runtime-discovery/v1');
   assert.equal(body.discovery.current.paneAgents[0].agentId, 'Rafael');
   assert.equal(body.discovery.current.canonicalAgents.length, 2);
+  assert.equal(
+    body.discovery.current.panes.find(item => item.pane === 'workspace').conversationId,
+    'rafael-restored',
+  );
   assert.equal(body.discovery.current.agentSessions[0].deliveryVerified, false);
   assert.equal(
     body.discovery.current.agentSessions[0].stateWarning,
     'open_without_conversation_evidence',
+  );
+  assert.ok(
+    body.discovery.warnings.some(
+      item => item.warning === 'identity_not_ready_conversation_preserved'
+        && item.agentId === 'Rafael',
+    ),
   );
 });
