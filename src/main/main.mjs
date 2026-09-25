@@ -9,6 +9,7 @@ import { PaneAgentRuntime } from './agent-runtime.mjs';
 import { agentBindingsForProfile, agentMissionIdForProfile } from './agent-identity.mjs';
 import { isGenerationStopControl, isTargetGenerationActive } from './generation-control.mjs';
 import { buildAgentSessionDeliveryProbe, isAgentSessionDeliveryConfirmed } from './agent-session-verification.mjs';
+import { buildRestoreSafeStartupPlan } from './startup-policy.mjs';
 import { instanceConfig, atomicJson } from './instance.mjs';
 
 const instance = instanceConfig(process.argv, app.getPath('userData'));
@@ -1929,18 +1930,6 @@ function createWindow() {
     .then(async (state) => {
       persistBridgeState(state);
       await sleep(1200);
-      const bootstrap = await paneAgentRuntime?.bootstrap().catch((error) => ({
-        ok: false,
-        error: error.message,
-      }));
-      if (bootstrap?.ok) {
-        emitBridgeEvent({ level: 'ok', message: 'MCF Agent Identity: Emily e Sofia READY.' });
-      } else {
-        emitBridgeEvent({
-          level: 'error',
-          message: 'MCF Agent Identity: bootstrap incompleto — ' + (bootstrap?.error || 'verificar /v1/agents'),
-        });
-      }
 
       try {
         const recovery = await paneAgentRuntime?.recoverPersistedMissions();
@@ -1954,16 +1943,48 @@ function createWindow() {
               + unresolved + ' não verificada(s).',
           });
         }
+
+        const startupPlan = buildRestoreSafeStartupPlan(restoredRuntimeState);
+        for (const pane of startupPlan.deferredPanes) {
+          const agentId = agentBindings[pane]?.agentId ?? pane;
+          emitBridgeEvent({
+            level: 'info',
+            message: 'MCF Agent Identity: bootstrap automático adiado para '
+              + agentId
+              + ' — conversa restaurada preservada em '
+              + startupPlan.panes[pane].conversationId
+              + '.',
+          });
+        }
+
+        for (const pane of startupPlan.bootstrapPanes) {
+          const agentId = agentBindings[pane]?.agentId;
+          if (!agentId) continue;
+          const bootstrap = await paneAgentRuntime?.bootstrap({ agentId }).catch((error) => ({
+            ok: false,
+            error: error.message,
+          }));
+          emitBridgeEvent({
+            level: bootstrap?.ok ? 'ok' : 'error',
+            message: bootstrap?.ok
+              ? 'MCF Agent Identity: ' + agentId + ' READY.'
+              : 'MCF Agent Identity: bootstrap incompleto para '
+                + agentId
+                + ' — '
+                + (bootstrap?.error || 'verificar /v1/agents'),
+          });
+        }
+
         paneAgentRuntime?.markStartupReady();
         emitBridgeEvent({
           level: 'ok',
-          message: 'MCF Agent Runtime: startup/recovery concluído — missões liberadas.',
+          message: 'MCF Agent Runtime: recovery concluído; conversas restauradas preservadas; missões liberadas conforme estado de identidade.',
         });
       } catch (error) {
         paneAgentRuntime?.markStartupInitializing();
         emitBridgeEvent({
           level: 'error',
-          message: 'MCF Mission Recovery falhou: ' + error.message,
+          message: 'MCF Mission Recovery/startup falhou: ' + error.message,
         });
       }
     })
