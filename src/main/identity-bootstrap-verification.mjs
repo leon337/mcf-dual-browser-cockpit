@@ -67,6 +67,17 @@ export function buildIdentityBootstrapProbe({
     const turnIdentityAttempts = turns.filter(isIdentityAttempt);
     const turnMatches = turnIdentityAttempts.filter(isExactIdentity);
 
+    const semanticBlocks = [...document.querySelectorAll(
+      'main [data-message-id], main article, main section, main div'
+    )];
+    const semanticIdentityAttemptsRaw = semanticBlocks.filter(isIdentityAttempt);
+    const semanticMatchesRaw = semanticIdentityAttemptsRaw.filter(isExactIdentity);
+    const leafOnly = nodes => nodes.filter(node =>
+      !nodes.some(other => other !== node && node.contains(other))
+    );
+    const semanticIdentityAttempts = leafOnly(semanticIdentityAttemptsRaw);
+    const semanticMatches = leafOnly(semanticMatchesRaw);
+
     let source = null;
     let anchor = null;
     let collection = null;
@@ -97,10 +108,21 @@ export function buildIdentityBootstrapProbe({
       identityAttempts = turnIdentityAttempts;
     }
 
+    if (!anchor && semanticMatches.length === 1) {
+      anchor = semanticMatches[0];
+      source = 'semantic-block';
+      collection = semanticBlocks;
+      identityAttempts = semanticIdentityAttempts;
+    }
+
     const userAnchorFound = Boolean(anchor);
     const conflictingAttempt = userAnchorFound
       ? identityAttempts.some(node => node !== anchor)
-      : (roleIdentityAttempts.length > 1 || turnIdentityAttempts.length > 1);
+      : (
+          roleIdentityAttempts.length > 1
+          || turnIdentityAttempts.length > 1
+          || semanticIdentityAttempts.length > 1
+        );
 
     let markerNode = null;
     if (anchor && collection) {
@@ -111,11 +133,14 @@ export function buildIdentityBootstrapProbe({
             && node.getAttribute('data-message-author-role') === 'user') {
           break;
         }
-        if (source === 'conversation-turn' && isIdentityAttempt(node)) {
+        if ((source === 'conversation-turn' || source === 'semantic-block')
+            && isIdentityAttempt(node)) {
           break;
         }
         const role = node.getAttribute?.('data-message-author-role');
-        const canCarryAssistantMarker = source === 'conversation-turn' || role === 'assistant';
+        const canCarryAssistantMarker = source === 'conversation-turn'
+          || source === 'semantic-block'
+          || role === 'assistant';
         if (canCarryAssistantMarker && textOf(node).includes(marker)) {
           markerNode = node;
           break;
@@ -174,10 +199,15 @@ export function buildIdentityBootstrapProbe({
       markerObserved,
       conflictingAttempt,
       composerContainsBootstrap,
-      matchingUserCount: source === 'role-message' ? roleMatches.length : turnMatches.length,
+      matchingUserCount: source === 'role-message'
+        ? roleMatches.length
+        : source === 'conversation-turn'
+          ? turnMatches.length
+          : semanticMatches.length,
       identityAttemptCount: identityAttempts.length,
       roleMatchCount: roleMatches.length,
       turnMatchCount: turnMatches.length,
+      semanticMatchCount: semanticMatches.length,
       conversationUrlOk,
       projectRootOk,
       userMessageId: messageIdOf(anchor),
@@ -226,7 +256,9 @@ export function buildAssistantMarkerProbe(marker) {
     'const roleAssistants=[...document.querySelectorAll("[data-message-author-role=\\\"assistant\\\"]")];',
     'if(roleAssistants.some(node=>textOf(node).includes(marker))) return true;',
     'const turns=[...document.querySelectorAll("section[data-testid^=\\\"conversation-turn-\\\"], article[data-testid^=\\\"conversation-turn-\\\"]")];',
-    'return turns.some(node=>{const text=textOf(node);return text.includes(marker)&&!text.includes(header);});',
+    'if(turns.some(node=>{const text=textOf(node);return text.includes(marker)&&!text.includes(header);})) return true;',
+    'const semantic=[...document.querySelectorAll("main [data-message-id], main article, main section, main div")];',
+    'return semantic.some(node=>{const text=textOf(node);return text.includes(marker)&&!text.includes(header);});',
     '})()',
   ].join('\n');
 }
