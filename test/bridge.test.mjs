@@ -472,6 +472,15 @@ test('message transport does not submit when native insertion is not observed', 
           expectedLength: 18,
         };
       }
+      if (script.includes('MCF_MESSAGE_PROGRAMMATIC_INSERT_FALLBACK')) {
+        return {
+          ok: false,
+          composerPresent: true,
+          actualLength: 0,
+          expectedLength: 18,
+          error: 'programmatic_insert_failed',
+        };
+      }
       if (script.includes('chat_send_control_not_found')) {
         submitCalls += 1;
         return { ok: true, method: 'button' };
@@ -494,6 +503,166 @@ test('message transport does not submit when native insertion is not observed', 
   assert.equal(result.ok, false);
   assert.equal(result.error, 'message_native_insert_not_observed');
   assert.equal(insertCalls, 1);
+  assert.equal(submitCalls, 0);
+});
+
+
+test('message transport uses programmatic fallback only when native insert leaves composer empty', async () => {
+  let insertCalls = 0;
+  let fallbackCalls = 0;
+  let submitCalls = 0;
+  let verificationCalls = 0;
+  const url = 'https://chatgpt.com/g/project/c/programmatic-fallback';
+
+  const wc = {
+    isDestroyed: () => false,
+    getURL: () => url,
+    getTitle: () => 'chat',
+    executeJavaScript: async script => {
+      if (script.includes('MCF_MESSAGE_COMPOSER_READINESS')) {
+        return {
+          ok: true,
+          composerPresent: true,
+          composerEditable: true,
+          generationActive: false,
+        };
+      }
+      if (script.includes('const enforceChatMode')) {
+        return {
+          ok: true,
+          baseline: {
+            url,
+            userMessageCount: 0,
+            lastUserMessageId: null,
+            lastAssistantMessageId: null,
+          },
+        };
+      }
+      if (script.includes('MCF_MESSAGE_INSERT_VERIFICATION')) {
+        return {
+          ok: false,
+          composerPresent: true,
+          actualLength: 0,
+          expectedLength: 20,
+          insertionMethod: 'native',
+        };
+      }
+      if (script.includes('MCF_MESSAGE_PROGRAMMATIC_INSERT_FALLBACK')) {
+        fallbackCalls += 1;
+        return {
+          ok: true,
+          composerPresent: true,
+          actualLength: 20,
+          expectedLength: 20,
+          insertionMethod: 'programmatic-fallback',
+        };
+      }
+      if (script.includes('chat_send_control_not_found')) {
+        submitCalls += 1;
+        return { ok: true, method: 'button' };
+      }
+      if (script.includes('conversationAdvanced')) {
+        verificationCalls += 1;
+        return {
+          ok: true,
+          composerCleared: true,
+          conversationAdvanced: true,
+          sent: true,
+          url,
+          userMessageCount: 1,
+          lastUserMessageId: 'user-new',
+          lastAssistantMessageId: null,
+          baselineLastAssistantMessageId: null,
+        };
+      }
+      if (script.includes('const expected =')) {
+        return {
+          ok: true,
+          composerEmpty: true,
+          composerTextLength: 0,
+          automationResidual: false,
+        };
+      }
+      return { ok: true };
+    },
+    insertText: async () => { insertCalls += 1; },
+  };
+
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    getPaneWebContents: () => wc,
+    captureDir: os.tmpdir(),
+    instanceId: 'test',
+    messageComposerReadyTimeoutMs: 20,
+    messageComposerReadyPollMs: 1,
+  });
+
+  const result = await bridge.sendMessage('chat', 'programmatic fallback');
+  assert.equal(result.ok, true);
+  assert.equal(result.deliveryConfirmed, true);
+  assert.equal(result.insertionMethod, 'programmatic-fallback');
+  assert.equal(insertCalls, 1);
+  assert.equal(fallbackCalls, 1);
+  assert.equal(submitCalls, 1);
+  assert.ok(verificationCalls >= 1);
+});
+
+test('message transport never programmatically overwrites unexpected composer content', async () => {
+  let fallbackCalls = 0;
+  let submitCalls = 0;
+  const wc = {
+    isDestroyed: () => false,
+    getURL: () => 'https://chatgpt.com/c/nonempty',
+    getTitle: () => 'chat',
+    executeJavaScript: async script => {
+      if (script.includes('MCF_MESSAGE_COMPOSER_READINESS')) {
+        return { ok: true, composerPresent: true, composerEditable: true, generationActive: false };
+      }
+      if (script.includes('const enforceChatMode')) {
+        return {
+          ok: true,
+          baseline: {
+            url: 'https://chatgpt.com/c/nonempty',
+            userMessageCount: 0,
+            lastUserMessageId: null,
+            lastAssistantMessageId: null,
+          },
+        };
+      }
+      if (script.includes('MCF_MESSAGE_INSERT_VERIFICATION')) {
+        return {
+          ok: false,
+          composerPresent: true,
+          actualLength: 7,
+          expectedLength: 20,
+        };
+      }
+      if (script.includes('MCF_MESSAGE_PROGRAMMATIC_INSERT_FALLBACK')) {
+        fallbackCalls += 1;
+        return { ok: true };
+      }
+      if (script.includes('chat_send_control_not_found')) {
+        submitCalls += 1;
+        return { ok: true, method: 'button' };
+      }
+      return { ok: true };
+    },
+    insertText: async () => {},
+  };
+
+  const bridge = new LocalAgentBridge({
+    getWorkspaceWebContents: () => wc,
+    getPaneWebContents: () => wc,
+    captureDir: os.tmpdir(),
+    instanceId: 'test',
+    messageComposerReadyTimeoutMs: 20,
+    messageComposerReadyPollMs: 1,
+  });
+
+  const result = await bridge.sendMessage('chat', 'do not overwrite draft');
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'message_native_insert_not_observed');
+  assert.equal(fallbackCalls, 0);
   assert.equal(submitCalls, 0);
 });
 
