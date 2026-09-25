@@ -9,7 +9,7 @@ import { PaneAgentRuntime } from './agent-runtime.mjs';
 import { agentBindingsForProfile, agentMissionIdForProfile } from './agent-identity.mjs';
 import { isGenerationStopControl, isTargetGenerationActive } from './generation-control.mjs';
 import { buildAgentSessionDeliveryProbe, isAgentSessionDeliveryConfirmed } from './agent-session-verification.mjs';
-import { buildRestoreSafeStartupPlan } from './startup-policy.mjs';
+import { buildRestoreSafeStartupPlan, conversationIdFromChatUrl, selectPersistedPaneUrl } from './startup-policy.mjs';
 import { instanceConfig, atomicJson } from './instance.mjs';
 
 const instance = instanceConfig(process.argv, app.getPath('userData'));
@@ -43,6 +43,8 @@ let splitRatio = 0.5;
 let bridge = null;
 let paneAgentRuntime = null;
 let restoredRuntimeState = null;
+let startupRestoredRuntimeState = null;
+const startupRestoreComplete = { chat: false, workspace: false };
 let runtimePersistTimer = null;
 const RUNTIME_STATE_VERSION = 1;
 const PANE_AGENT_MISSION_ID = agentMissionIdForProfile(instance.agentProfile);
@@ -174,16 +176,28 @@ function restoredWindowBounds() {
 
 function snapshotRuntimeState() {
   if (!mainWindow || mainWindow.isDestroyed()) return null;
-  const chatUrl = chatView && !chatView.webContents.isDestroyed()
+  const liveChatUrl = chatView && !chatView.webContents.isDestroyed()
     ? chatView.webContents.getURL()
-    : restoredRuntimeState?.chat?.url;
-  const workspaceUrl = workspaceView && !workspaceView.webContents.isDestroyed()
+    : null;
+  const liveWorkspaceUrl = workspaceView && !workspaceView.webContents.isDestroyed()
     ? workspaceView.webContents.getURL()
-    : restoredRuntimeState?.workspace?.url;
+    : null;
+  const chatUrl = selectPersistedPaneUrl({
+    liveUrl: liveChatUrl,
+    restoredUrl: startupRestoredRuntimeState?.chat?.url ?? restoredRuntimeState?.chat?.url,
+    restoreComplete: startupRestoreComplete.chat,
+    fallback: CHATGPT_URL,
+  });
+  const workspaceUrl = selectPersistedPaneUrl({
+    liveUrl: liveWorkspaceUrl,
+    restoredUrl: startupRestoredRuntimeState?.workspace?.url ?? restoredRuntimeState?.workspace?.url,
+    restoreComplete: startupRestoreComplete.workspace,
+    fallback: WORKSPACE_URL,
+  });
   return {
     version: RUNTIME_STATE_VERSION,
-    chat: { url: normalizeRestoredUrl(chatUrl, CHATGPT_URL) },
-    workspace: { url: normalizeRestoredUrl(workspaceUrl, WORKSPACE_URL) },
+    chat: { url: chatUrl },
+    workspace: { url: workspaceUrl },
     splitRatio,
     window: {
       bounds: mainWindow.getNormalBounds(),
@@ -310,7 +324,16 @@ function secureWebContents(key, view, partition) {
   for (const eventName of ['did-start-loading', 'did-stop-loading', 'did-navigate', 'did-navigate-in-page']) {
     wc.on(eventName, () => {
       emitState(key, wc);
-      if (eventName !== 'did-start-loading') scheduleRuntimeStatePersist();
+      if (eventName !== 'did-start-loading') {
+        const expectedConversationId = conversationIdFromChatUrl(
+          startupRestoredRuntimeState?.[key]?.url,
+        );
+        const currentConversationId = conversationIdFromChatUrl(wc.getURL());
+        if (!expectedConversationId || currentConversationId === expectedConversationId) {
+          startupRestoreComplete[key] = true;
+        }
+        scheduleRuntimeStatePersist();
+      }
     });
   }
   wc.on('page-title-updated', () => emitState(key, wc));
@@ -1840,8 +1863,14 @@ function createViews() {
   mainWindow.contentView.addChildView(workspaceView);
   updateViewBounds();
 
-  const chatStartUrl = normalizeRestoredUrl(restoredRuntimeState?.chat?.url, CHATGPT_URL);
-  const workspaceStartUrl = normalizeRestoredUrl(restoredRuntimeState?.workspace?.url, WORKSPACE_URL);
+  const chatStartUrl = normalizeRestoredUrl(
+    startupRestoredRuntimeState?.chat?.url ?? restoredRuntimeState?.chat?.url,
+    CHATGPT_URL,
+  );
+  const workspaceStartUrl = normalizeRestoredUrl(
+    startupRestoredRuntimeState?.workspace?.url ?? restoredRuntimeState?.workspace?.url,
+    WORKSPACE_URL,
+  );
 
   chatView.webContents.loadURL(chatStartUrl).catch((error) => {
     emitBridgeEvent({ level: 'error', message: `ChatGPT: ${error.message}` });
@@ -1944,7 +1973,7 @@ function createWindow() {
           });
         }
 
-        const startupPlan = buildRestoreSafeStartupPlan(restoredRuntimeState);
+        const startupPlan = buildRestoreSafeStartupPlan(startupRestoredRuntimeState);
         for (const pane of startupPlan.deferredPanes) {
           const agentId = agentBindings[pane]?.agentId ?? pane;
           emitBridgeEvent({
@@ -2141,6 +2170,14 @@ app.whenReady().then(() => {
   if (!ownsInstance) return;
   app.setAccessibilitySupportEnabled(true);
   restoredRuntimeState = loadRuntimeState();
+  startupRestoredRuntimeState = restoredRuntimeState
+    ? JSON.parse(JSON.stringify(restoredRuntimeState))
+    : null;
+  for (const pane of ['chat', 'workspace']) {
+    startupRestoreComplete[pane] = !conversationIdFromChatUrl(
+      startupRestoredRuntimeState?.[pane]?.url,
+    );
+  }
   const savedSplit = Number(restoredRuntimeState?.splitRatio);
   if (Number.isFinite(savedSplit)) splitRatio = Math.min(0.72, Math.max(0.28, savedSplit));
   createWindow();
