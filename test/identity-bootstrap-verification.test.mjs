@@ -116,3 +116,70 @@ test('assistant marker probe uses conversation-turn fallback without matching th
   assert.equal(run(makeDocument([bootstrap, reply])), true);
 });
 
+test('identity probe verifies from semantic main blocks when role and turn selectors are absent', () => {
+  const sessionId = 'session-sofia';
+  const marker = 'MCF_AGENT_READY agent_id=Sofia session_id=' + sessionId;
+  const bootstrap = fakeNode([
+    '[MCF PANE AGENT IDENTITY]',
+    'agent_id: Sofia',
+    'session_id: ' + sessionId,
+    'contract_sha256: ' + 'b'.repeat(64),
+  ].join('\n'));
+  const reply = fakeNode(marker);
+
+  const document = {
+    querySelector(selector) {
+      if (selector === '#prompt-textarea') return fakeNode('');
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === '[data-message-author-role]') return [];
+      if (selector.includes('conversation-turn-')) return [];
+      if (selector.includes('main ')) return [bootstrap, reply];
+      return [];
+    },
+  };
+  const location = {
+    href: 'https://chatgpt.com/g/g-sofia/c/12345678-1234-1234-1234-123456789abc',
+  };
+
+  const script = buildIdentityBootstrapProbe({
+    agentId: 'Sofia',
+    sessionId,
+    contractDigest: 'b'.repeat(64),
+    marker,
+    expectedProjectRoot: 'https://chatgpt.com/g/g-sofia/project',
+  });
+
+  const evidence = Function('document', 'location', 'URL', '"use strict"; return ' + script)(
+    document,
+    location,
+    URL,
+  );
+
+  assert.equal(evidence.verified, true);
+  assert.equal(evidence.source, 'semantic-block');
+  assert.equal(evidence.semanticMatchCount, 1);
+});
+
+test('assistant marker probe falls back to semantic main blocks', () => {
+  const marker = 'MCF_AGENT_READY agent_id=Sofia session_id=session-sofia';
+  const bootstrap = fakeNode('[MCF PANE AGENT IDENTITY]\n' + marker);
+  const reply = fakeNode(marker);
+
+  const makeDocument = semantic => ({
+    querySelectorAll(selector) {
+      if (selector.includes('data-message-author-role')) return [];
+      if (selector.includes('conversation-turn-')) return [];
+      if (selector.includes('main ')) return semantic;
+      return [];
+    },
+  });
+
+  const script = buildAssistantMarkerProbe(marker);
+  const run = document => Function('document', '"use strict"; return ' + script)(document);
+
+  assert.equal(run(makeDocument([bootstrap])), false);
+  assert.equal(run(makeDocument([bootstrap, reply])), true);
+});
+
