@@ -9,7 +9,7 @@ import { PaneAgentRuntime } from './agent-runtime.mjs';
 import { agentBindingsForProfile, agentMissionIdForProfile } from './agent-identity.mjs';
 import { isGenerationStopControl, isTargetGenerationActive } from './generation-control.mjs';
 import { buildAgentSessionDeliveryProbe, isAgentSessionDeliveryConfirmed } from './agent-session-verification.mjs';
-import { buildIdentityBootstrapProbe } from './identity-bootstrap-verification.mjs';
+import { buildAssistantMarkerProbe, buildIdentityBootstrapProbe } from './identity-bootstrap-verification.mjs';
 import { buildRestoreSafeStartupPlan } from './startup-policy.mjs';
 import { instanceConfig, atomicJson } from './instance.mjs';
 
@@ -483,18 +483,20 @@ async function waitForConversationUrl(pane, timeoutMs = 15000) {
 async function waitForAssistantMarker(pane, marker, timeoutMs = 60000) {
   const wc = getPane(pane);
   if (!wc || wc.isDestroyed()) return false;
+
+  let probe;
+  try {
+    probe = buildAssistantMarkerProbe(marker);
+  } catch {
+    return false;
+  }
+
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (wc.isDestroyed()) return false;
-    const found = await wc.executeJavaScript(
-      "(() => [...document.querySelectorAll('[data-message-author-role=\\\"assistant\\\"]')]"
-      + ".some(node => String(node.innerText || node.textContent || '').includes("
-      + JSON.stringify(marker)
-      + ")))()",
-      true,
-    ).catch(() => false);
+    const found = await wc.executeJavaScript(probe, true).catch(() => false);
     if (found) return true;
-    await sleep(500);
+    await sleep(250);
   }
   return false;
 }
