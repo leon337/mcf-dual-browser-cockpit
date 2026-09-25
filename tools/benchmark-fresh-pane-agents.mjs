@@ -139,11 +139,20 @@ const paneAgents = discovery?.discovery?.current?.paneAgents ?? [];
 if (!paneAgents.length) throw new Error('pane_agents_not_discovered');
 
 const bootstrapStarted = elapsed();
-const bootstrap = await request(descriptor, '/v1/agents/bootstrap', {
+let bootstrapTransportSettledAt = null;
+const bootstrapTransport = request(descriptor, '/v1/agents/bootstrap', {
   method: 'POST',
   body: JSON.stringify({ force: true, parallel }),
-});
-marks.bootstrap_return = elapsed();
+})
+  .then(body => {
+    bootstrapTransportSettledAt = elapsed();
+    return { ok: true, body };
+  })
+  .catch(error => {
+    bootstrapTransportSettledAt = elapsed();
+    return { ok: false, error: error.message };
+  });
+marks.bootstrap_dispatched = elapsed();
 
 const final = await waitUntil(async () => {
   const agentsResponse = await request(descriptor, '/v1/agents');
@@ -181,6 +190,14 @@ const final = await waitUntil(async () => {
 }, 'ready_persisted');
 marks.ready_persisted = elapsed();
 
+const transport = await Promise.race([
+  bootstrapTransport,
+  sleep(750).then(() => ({ ok: null, pending: true })),
+]);
+if (bootstrapTransportSettledAt != null) {
+  marks.bootstrap_transport_settled = bootstrapTransportSettledAt;
+}
+
 const safeAgents = final.agents.map(agent => ({
   agentId: agent.agentId,
   pane: agent.pane,
@@ -197,9 +214,10 @@ console.log(JSON.stringify({
     bootstrap_only: marks.ready_persisted - bootstrapStarted,
     total: marks.ready_persisted,
   },
+  bootstrapTransport: transport,
+  bootstrapCompletionSource: 'runtime-readiness',
   bootstrap: {
-    ok: bootstrap?.ok === true,
-    parallel: bootstrap?.parallel === true,
+    parallelRequested: parallel,
   },
   agents: safeAgents,
   persistedUrls: {
