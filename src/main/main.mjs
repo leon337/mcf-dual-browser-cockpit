@@ -9,6 +9,7 @@ import { PaneAgentRuntime } from './agent-runtime.mjs';
 import { agentBindingsForProfile, agentMissionIdForProfile } from './agent-identity.mjs';
 import { isGenerationStopControl, isTargetGenerationActive } from './generation-control.mjs';
 import { buildAgentSessionDeliveryProbe, isAgentSessionDeliveryConfirmed } from './agent-session-verification.mjs';
+import { buildIdentityBootstrapProbe } from './identity-bootstrap-verification.mjs';
 import { buildRestoreSafeStartupPlan } from './startup-policy.mjs';
 import { instanceConfig, atomicJson } from './instance.mjs';
 
@@ -436,54 +437,25 @@ async function inspectIdentityBootstrap(
   if (!wc || wc.isDestroyed()) {
     return { ok: false, verified: false, error: 'pane_unavailable' };
   }
-  if (!agentId || !sessionId || !contractDigest || !marker) {
-    return { ok: false, verified: false, error: 'identity_bootstrap_probe_invalid' };
-  }
 
-  const script = [
-    '(() => {',
-    'const agentId=' + JSON.stringify(agentId) + ';',
-    'const sessionId=' + JSON.stringify(sessionId) + ';',
-    'const contractDigest=' + JSON.stringify(contractDigest) + ';',
-    'const marker=' + JSON.stringify(marker) + ';',
-    'const expectedUserMessageId=' + JSON.stringify(userMessageId) + ';',
-    'const expectedConversationUrl=' + JSON.stringify(expectedConversationUrl) + ';',
-    'const expectedProjectRoot=' + JSON.stringify(expectedProjectRoot) + ';',
-    'const messages=[...document.querySelectorAll("[data-message-author-role]")];',
-    'const users=messages.filter(n=>n.getAttribute("data-message-author-role")==="user");',
-    'const textOf=n=>String(n?.innerText||n?.textContent||"");',
-    'const header="[MCF PANE AGENT IDENTITY]";',
-    'const agentNeedle="agent_id: "+agentId;',
-    'const sessionNeedle="session_id: "+sessionId;',
-    'const digestNeedle="contract_sha256: "+contractDigest;',
-    'const identityAttempts=users.filter(n=>{const t=textOf(n);return t.includes(header)&&t.includes(agentNeedle);});',
-    'const matches=identityAttempts.filter(n=>{const t=textOf(n);return t.includes(sessionNeedle)&&t.includes(digestNeedle);});',
-    'let user=null;',
-    'if(expectedUserMessageId){user=matches.find(n=>n.getAttribute("data-message-id")===expectedUserMessageId)||null;}',
-    'else if(matches.length===1){user=matches[0];}',
-    'const userAnchorFound=Boolean(user);',
-    'const conflictingAttempt=identityAttempts.some(n=>n!==user);',
-    'const userIndex=user?messages.indexOf(user):-1;',
-    'let nextUserIndex=messages.length;',
-    'if(userIndex>=0){for(let i=userIndex+1;i<messages.length;i+=1){if(messages[i].getAttribute("data-message-author-role")==="user"){nextUserIndex=i;break;}}}',
-    'const assistants=userIndex>=0?messages.slice(userIndex+1,nextUserIndex).filter(n=>n.getAttribute("data-message-author-role")==="assistant"):[];',
-    'const markerNode=assistants.find(n=>textOf(n).includes(marker))||null;',
-    'const markerObserved=Boolean(markerNode);',
-    'const url=location.href;',
-    'const conversationUrlOk=!expectedConversationUrl||url===expectedConversationUrl;',
-    'const projectRootOk=!expectedProjectRoot||url===expectedProjectRoot||url.startsWith(expectedProjectRoot.replace(/\/$/,"")+"/");',
-    'const verified=userAnchorFound&&markerObserved&&!conflictingAttempt&&conversationUrlOk&&projectRootOk;',
-    'return {',
-    'ok:true,verified,userAnchorFound,markerObserved,conflictingAttempt,',
-    'matchingUserCount:matches.length,identityAttemptCount:identityAttempts.length,',
-    'conversationUrlOk,projectRootOk,',
-    'userMessageId:user?.getAttribute("data-message-id")||null,',
-    'assistantMessageId:markerNode?.getAttribute("data-message-id")||null,',
-    'url,',
-    'error:verified?null:conflictingAttempt?"identity_bootstrap_conflicting_attempt":!userAnchorFound?"identity_bootstrap_user_anchor_not_found":!markerObserved?"identity_bootstrap_marker_not_linked":!conversationUrlOk?"identity_bootstrap_conversation_mismatch":"identity_bootstrap_project_mismatch"',
-    '};',
-    '})()',
-  ].join('\n');
+  let script;
+  try {
+    script = buildIdentityBootstrapProbe({
+      agentId,
+      sessionId,
+      contractDigest,
+      marker,
+      userMessageId,
+      expectedConversationUrl,
+      expectedProjectRoot,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      verified: false,
+      error: error?.message ?? 'identity_bootstrap_probe_invalid',
+    };
+  }
 
   return wc.executeJavaScript(script, true).catch(error => ({
     ok: false,
