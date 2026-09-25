@@ -121,6 +121,16 @@ Exemplos:
 A rota `/v1/pointer` também é multipainel, mas ações semânticas/programáticas continuam preferidas quando disponíveis.
 
 
+## Perfis persistentes de agentes
+
+O runtime suporta três perfis canônicos:
+
+- `audit-architecture`: Emily + Sofia;
+- `debug-engineering`: Patrícia + Rafael;
+- `backend-quality`: Renato + Eduardo.
+
+Cada instância mantém `runtime-state.json` próprio, incluindo URLs de `chat` e `workspace`, para retomada após reinício.
+
 ## Discovery operacional para o MESTRE
 
 Antes de despachar trabalho, um MESTRE novo deve consultar o endpoint autenticado `GET /v1/discovery`. Ele descreve a instância, perfil, agentes dos panes, registro canônico disponível para Agent Sessions, sessões independentes já abertas, mecanismos e critérios de sucesso.
