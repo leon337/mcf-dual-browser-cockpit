@@ -8,6 +8,7 @@ import { LocalAgentBridge } from './bridge.mjs';
 import { PaneAgentRuntime } from './agent-runtime.mjs';
 import { agentBindingsForProfile } from './agent-identity.mjs';
 import { isGenerationStopControl, isTargetGenerationActive } from './generation-control.mjs';
+import { buildAgentSessionDeliveryProbe, isAgentSessionDeliveryConfirmed } from './agent-session-verification.mjs';
 import { instanceConfig, atomicJson } from './instance.mjs';
 
 const instance = instanceConfig(process.argv, app.getPath('userData'));
@@ -1603,25 +1604,30 @@ async function injectAgentBootstrap(wc, bootstrap) {
   if (!sent?.ok) return sent ?? { ok: false, error: 'chat_send_failed' };
 
   const sessionId = bootstrap.match(/^session_id:\s*(\S+)/m)?.[1] || '';
-  const deadline = Date.now() + 30000;
-  while (Date.now() < deadline) {
-    const evidence = await wc.executeJavaScript(`(() => {
-      const body = document.body?.innerText || '';
-      return {
-        path: location.pathname,
-        title: document.title,
-        hasSession: ${JSON.stringify(sessionId)} ? body.includes(${JSON.stringify(sessionId)}) : false,
-        hasUserTurn: body.includes('You said:') || body.includes('Você disse:') || body.includes('[MCF AGENT SESSION]')
-      };
-    })()`, true).catch(() => null);
+  if (!sessionId) {
+    return { ok: false, error: 'agent_session_id_missing', typed, sent };
+  }
 
-    if (evidence && (String(evidence.path || '').startsWith('/c/') || (evidence.hasSession && evidence.hasUserTurn))) {
+  const probeScript = buildAgentSessionDeliveryProbe(sessionId);
+  const deadline = Date.now() + 30000;
+  let lastEvidence = null;
+  while (Date.now() < deadline) {
+    const evidence = await wc.executeJavaScript(probeScript, true).catch(() => null);
+    lastEvidence = evidence;
+
+    if (isAgentSessionDeliveryConfirmed(evidence)) {
       return { ok: true, typed, sent, evidence };
     }
     await sleep(500);
   }
 
-  return { ok: false, error: 'chat_conversation_not_created', typed, sent };
+  return {
+    ok: false,
+    error: 'chat_conversation_not_created',
+    typed,
+    sent,
+    evidence: lastEvidence,
+  };
 }
 
 async function markAgentSessionOpen(sessionId, chatUrl) {
@@ -1886,6 +1892,10 @@ function createWindow() {
     captureWorkspace,
     openAgentSession,
     listAgentSessions,
+    listCanonicalAgents: async () => {
+      const result = await runAgentSessionTool(['list']);
+      return Array.isArray(result?.agents) ? result.agents : [];
+    },
     getAgentIdentities: async () => paneAgentRuntime?.getIdentities() ?? [],
     bootstrapAgentIdentities: async (input) => {
       if (!paneAgentRuntime) return { ok: false, error: 'agent_identity_runtime_unavailable' };

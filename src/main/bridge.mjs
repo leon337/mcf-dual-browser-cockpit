@@ -4,6 +4,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { LiveAgentEventBus } from './live-agent-events.mjs';
 import { isGenerationStopControl } from './generation-control.mjs';
+import { buildRuntimeDiscovery } from './runtime-discovery.mjs';
 
 const MAX_BODY = 1024 * 1024;
 const MAX_MESSAGE = 16000;
@@ -120,6 +121,7 @@ export class LocalAgentBridge {
     captureWorkspace = null,
     openAgentSession = null,
     listAgentSessions = null,
+    listCanonicalAgents = null,
     getAgentIdentities = null,
     bootstrapAgentIdentities = null,
     dispatchAgentMission = null,
@@ -148,6 +150,7 @@ export class LocalAgentBridge {
     this.captureWorkspace = captureWorkspace;
     this.openAgentSession = openAgentSession;
     this.listAgentSessions = listAgentSessions;
+    this.listCanonicalAgents = listCanonicalAgents;
     this.getAgentIdentities = getAgentIdentities;
     this.bootstrapAgentIdentities = bootstrapAgentIdentities;
     this.dispatchAgentMission = dispatchAgentMission;
@@ -927,6 +930,45 @@ export class LocalAgentBridge {
           ?? null;
         this.liveEvents.attach(req, res, { after });
         return;
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/discovery') {
+        const warnings = [];
+        const read = async (source, fn) => {
+          if (typeof fn !== 'function') {
+            warnings.push({ source, error: 'unavailable' });
+            return [];
+          }
+          try {
+            const value = await fn();
+            return Array.isArray(value) ? value : [];
+          } catch (error) {
+            warnings.push({
+              source,
+              error: String(error?.message || error || 'unknown_error'),
+            });
+            return [];
+          }
+        };
+
+        const [paneAgents, agentSessions, canonicalAgents] = await Promise.all([
+          read('paneAgents', this.getAgentIdentities),
+          read('agentSessions', this.listAgentSessions),
+          read('canonicalAgents', this.listCanonicalAgents),
+        ]);
+
+        const discovery = buildRuntimeDiscovery({
+          instanceId: this.instanceId,
+          agentProfile: this.agentProfile,
+          paused: this.paused,
+          busy: this.busy,
+          queueDepth: this.mutationQueue.length,
+          paneAgents,
+          agentSessions,
+          canonicalAgents,
+          warnings,
+        });
+        return json(res, 200, { ok: true, discovery });
       }
 
       if (req.method === 'POST') {
