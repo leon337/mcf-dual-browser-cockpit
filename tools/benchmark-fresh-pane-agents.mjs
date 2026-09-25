@@ -77,7 +77,8 @@ async function request(descriptor, pathname, options = {}) {
     try { body = text ? JSON.parse(text) : null; } catch {}
     if (!response.ok) {
       throw new Error(
-        'bridge_http_' + response.status + (body?.error ? ':' + body.error : ''),
+        'bridge_http_' + response.status + ':'
+          + (body?.error || JSON.stringify(body || {})),
       );
     }
     return body;
