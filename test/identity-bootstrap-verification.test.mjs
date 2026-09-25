@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildAssistantMarkerProbe,
   buildIdentityBootstrapProbe,
   isIdentityBootstrapEvidenceVerified,
 } from '../src/main/identity-bootstrap-verification.mjs';
@@ -94,3 +95,24 @@ test('identity verification remains fail-closed when bootstrap is still in compo
     projectRootOk: true,
   }), false);
 });
+
+test('assistant marker probe uses conversation-turn fallback without matching the bootstrap prompt', () => {
+  const marker = 'MCF_AGENT_READY agent_id=Emily session_id=session-emily';
+  const bootstrap = fakeNode('[MCF PANE AGENT IDENTITY]\n' + marker);
+  const reply = fakeNode(marker);
+
+  const makeDocument = turns => ({
+    querySelectorAll(selector) {
+      if (selector.includes('data-message-author-role')) return [];
+      if (selector.includes('conversation-turn-')) return turns;
+      return [];
+    },
+  });
+
+  const script = buildAssistantMarkerProbe(marker);
+  const run = document => Function('document', '"use strict"; return ' + script)(document);
+
+  assert.equal(run(makeDocument([bootstrap])), false);
+  assert.equal(run(makeDocument([bootstrap, reply])), true);
+});
+
