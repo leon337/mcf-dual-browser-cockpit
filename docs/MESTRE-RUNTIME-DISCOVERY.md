@@ -146,3 +146,10 @@ O discovery expõe:
 - warning `identity_not_ready_conversation_preserved` quando a conversa foi preservada mas o binding não está READY.
 
 Bootstrap explícito continua disponível em `POST /v1/agents/bootstrap`, porém deve ser tratado como ação potencialmente mutante da superfície e não deve ser disparado automaticamente somente por reinício.
+
+### Snapshot imutável durante restauração
+
+A decisão de preservar ou bootstrapar um pane usa uma cópia imutável do `runtime-state.json` lido no início do processo.
+
+Enquanto o conversation ID originalmente persistido ainda não foi observado no WebContents carregado, gravações intermediárias do runtime devem preservar a URL original. Rotas transitórias como `https://chatgpt.com/` ou `about:blank` não podem apagar o checkpoint da conversa nem transformar um pane restaurável em pane elegível para bootstrap automático.
+
