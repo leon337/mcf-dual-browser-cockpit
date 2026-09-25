@@ -138,6 +138,22 @@ const discovery = await request(descriptor, '/v1/discovery');
 const paneAgents = discovery?.discovery?.current?.paneAgents ?? [];
 if (!paneAgents.length) throw new Error('pane_agents_not_discovered');
 
+const beforeAgentsResponse = await request(descriptor, '/v1/agents');
+const beforeAgents = beforeAgentsResponse?.agents ?? [];
+let beforeRuntime = null;
+try {
+  beforeRuntime = await readJson(runtimeStatePath);
+} catch {
+  beforeRuntime = null;
+}
+const beforeSessionByAgent = new Map(
+  beforeAgents.map(agent => [agent.agentId, agent.sessionId ?? null]),
+);
+const beforeUrlByPane = {
+  chat: beforeRuntime?.chat?.url ?? null,
+  workspace: beforeRuntime?.workspace?.url ?? null,
+};
+
 const bootstrapStarted = elapsed();
 let bootstrapTransportSettledAt = null;
 const bootstrapTransport = request(descriptor, '/v1/agents/bootstrap', {
@@ -158,7 +174,12 @@ const final = await waitUntil(async () => {
   const agentsResponse = await request(descriptor, '/v1/agents');
   const agents = agentsResponse?.agents ?? [];
   const agentReady = agents.length === paneAgents.length
-    && agents.every(agent => agent.state === 'READY' && agent.handshakeVerified === true);
+    && agents.every(agent =>
+      agent.state === 'READY'
+      && agent.handshakeVerified === true
+      && agent.sessionId
+      && agent.sessionId !== beforeSessionByAgent.get(agent.agentId)
+    );
   if (!agentReady) return { ok: false, value: { agents } };
 
   const paneStates = {};
@@ -170,8 +191,11 @@ const final = await waitUntil(async () => {
     paneStates[agent.pane] = state?.state ?? null;
   }
 
-  const stateUrlsReady = Object.values(paneStates)
-    .every(state => canonicalConversation(state?.url));
+  const stateUrlsReady = Object.entries(paneStates)
+    .every(([pane, state]) =>
+      canonicalConversation(state?.url)
+      && state?.url !== beforeUrlByPane[pane]
+    );
   if (!stateUrlsReady) return { ok: false, value: { agents, paneStates } };
 
   let persisted = null;
@@ -182,7 +206,9 @@ const final = await waitUntil(async () => {
   }
 
   const persistedReady = canonicalConversation(persisted?.chat?.url)
-    && canonicalConversation(persisted?.workspace?.url);
+    && canonicalConversation(persisted?.workspace?.url)
+    && persisted?.chat?.url !== beforeUrlByPane.chat
+    && persisted?.workspace?.url !== beforeUrlByPane.workspace;
 
   return persistedReady
     ? { ok: true, value: { agents, paneStates, persisted } }
@@ -218,6 +244,10 @@ console.log(JSON.stringify({
   bootstrapCompletionSource: 'runtime-readiness',
   bootstrap: {
     parallelRequested: parallel,
+  },
+  previous: {
+    sessions: Object.fromEntries(beforeSessionByAgent),
+    urls: beforeUrlByPane,
   },
   agents: safeAgents,
   persistedUrls: {
