@@ -1482,21 +1482,20 @@ export class PaneAgentRuntime {
     return { ok: true, reused, identity: clone(record), receipt };
   }
 
-  async bootstrap({ agentId = null, force = false } = {}) {
+  async bootstrap({ agentId = null, force = false, parallel = false } = {}) {
     const registry = await this.broker.listAgents();
     const canonicalAgents = Array.isArray(registry) ? registry : registry?.agents;
     if (!Array.isArray(canonicalAgents)) throw new Error('canonical_agent_registry_unavailable');
 
     const panes = agentId ? [paneForAgent(agentId, this.agentBindings)] : [...PANES];
-    const results = [];
-    for (const pane of panes) {
+
+    const runPane = async pane => {
       const checkpoint = this.getRecoveryCheckpoint({ pane });
       if (checkpoint.recoveryRequired || checkpoint.mutationAllowed === false) {
-        results.push({ ok: false, error: 'pane_recovery_required', pane, checkpoint });
-        continue;
+        return { ok: false, error: 'pane_recovery_required', pane, checkpoint };
       }
       try {
-        results.push(await this.#bootstrapPane(pane, canonicalAgents, Boolean(force)));
+        return await this.#bootstrapPane(pane, canonicalAgents, Boolean(force));
       } catch (error) {
         const manifest = agentBindingForPane(pane, this.agentBindings);
         const current = this.state.bindings[pane] ?? {
@@ -1511,12 +1510,21 @@ export class PaneAgentRuntime {
         current.updatedAt = this.now();
         this.state.bindings[pane] = current;
         this.#persist();
-        results.push({ ok: false, error: error.message, identity: clone(current) });
+        return { ok: false, error: error.message, identity: clone(current) };
       }
-    }
+    };
+
+    const results = parallel && panes.length > 1
+      ? await Promise.all(panes.map(runPane))
+      : await (async () => {
+          const sequential = [];
+          for (const pane of panes) sequential.push(await runPane(pane));
+          return sequential;
+        })();
 
     return {
       ok: results.every(result => result.ok),
+      parallel: Boolean(parallel && panes.length > 1),
       agents: results,
     };
   }
