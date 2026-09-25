@@ -1,6 +1,6 @@
 # MESTRE — Runtime Discovery do MCF Dual Browser
 
-**Classificação:** protocolo operacional da Execution Surface  
+**Classificação:** protocolo operacional da Execution Surface
 **Regra central:** o MESTRE deve descobrir o runtime antes de operar agentes, panes ou Agent Sessions.
 
 ## Objetivo
