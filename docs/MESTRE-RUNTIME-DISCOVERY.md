@@ -146,4 +146,3 @@ O discovery expõe:
 - warning `identity_not_ready_conversation_preserved` quando a conversa foi preservada mas o binding não está READY.
 
 Bootstrap explícito continua disponível em `POST /v1/agents/bootstrap`, porém deve ser tratado como ação potencialmente mutante da superfície e não deve ser disparado automaticamente somente por reinício.
-
