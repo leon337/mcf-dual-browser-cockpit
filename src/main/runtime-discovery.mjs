@@ -83,6 +83,7 @@ export function buildRuntimeDiscovery({
       'Read /v1/discovery before dispatching work.',
       'Preserve restored /c/<conversation-id> panes; startup must not mutate them automatically.',
       'Use pane agents for the two identity-bound panes of this instance.',
+      'When LEANDRO explicitly requests fresh pane chats, prefer POST /v1/agents/bootstrap with force=true and parallel=true.',
       'Use Agent Session only when an independent ChatGPT window/session is required.',
       'Treat composer text as a draft, never as delivery evidence.',
       'Require explicit conversation evidence before declaring a new chat/session open.',
@@ -94,6 +95,14 @@ export function buildRuntimeDiscovery({
           restoredConversationHasPriority: true,
           autoBootstrapOnRestoredConversation: false,
           explicitBootstrapRoute: 'POST /v1/agents/bootstrap',
+          fastFreshBootstrap: {
+            route: 'POST /v1/agents/bootstrap',
+            body: { force: true, parallel: true },
+            requiresExplicitFreshChatIntent: true,
+            preservesMissionRecoveryGate: true,
+            reconciliationPrecedesResend: true,
+            completion: 'all requested pane agents are READY with handshakeVerified=true and canonical /c/<conversation-id> URLs',
+          },
         },
         routes: {
           list: 'GET /v1/agents',
