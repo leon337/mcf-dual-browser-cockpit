@@ -31,3 +31,27 @@ export function buildRestoreSafeStartupPlan(runtimeState, panes = ['chat', 'work
     bootstrapPanes: panes.filter(pane => panePlan[pane]?.autoBootstrapAllowed),
   };
 }
+
+function normalizeHttpUrl(value, fallback = null) {
+  if (typeof value !== 'string' || !value.trim()) return fallback;
+  try {
+    const parsed = new URL(value);
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export function selectPersistedPaneUrl({
+  liveUrl = null,
+  restoredUrl = null,
+  restoreComplete = true,
+  fallback = null,
+} = {}) {
+  const normalizedRestored = normalizeHttpUrl(restoredUrl, fallback);
+  if (!restoreComplete && conversationIdFromChatUrl(normalizedRestored)) {
+    return normalizedRestored;
+  }
+  return normalizeHttpUrl(liveUrl, normalizedRestored ?? fallback);
+}
+
