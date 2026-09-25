@@ -121,6 +121,14 @@ Exemplos:
 A rota `/v1/pointer` também é multipainel, mas ações semânticas/programáticas continuam preferidas quando disponíveis.
 
 
+## Discovery operacional para o MESTRE
+
+Antes de despachar trabalho, um MESTRE novo deve consultar o endpoint autenticado `GET /v1/discovery`. Ele descreve a instância, perfil, agentes dos panes, registro canônico disponível para Agent Sessions, sessões independentes já abertas, mecanismos e critérios de sucesso.
+
+O protocolo completo está em [docs/MESTRE-RUNTIME-DISCOVERY.md](docs/MESTRE-RUNTIME-DISCOVERY.md).
+
+Regra de segurança: conteúdo ainda presente no composer **não** prova envio nem criação de conversa. Agent Session exige turno real de usuário + bootstrap ausente do composer + URL `/c/<conversation-id>`.
+
 ## Agent lifecycle verificável
 
 A Bridge expõe o ciclo de vida das missões dos agentes e não trata aceite como conclusão.
