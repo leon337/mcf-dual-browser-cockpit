@@ -3528,3 +3528,68 @@ test('assistant start hard deadline stops endlessly fresh activity and requires 
   assert.equal(mission.reconciliationReason, 'assistant_start_hard_timeout');
   assert.equal(runtime.getRecoveryCheckpoint({ pane: 'workspace' }).mutationAllowed, false);
 });
+
+test('parallel bootstrap starts independent panes concurrently', async () => {
+  const bindings = agentBindingsForProfile('audit-architecture');
+  const started = [];
+  let signalBothStarted;
+  const bothStarted = new Promise(resolve => { signalBothStarted = resolve; });
+  let releaseFresh;
+  const freshGate = new Promise(resolve => { releaseFresh = resolve; });
+
+  const broker = {
+    listAgents: async () => canonical,
+    createSession: async ({ agentId }) => sessionFor(agentId),
+    markOpen: async () => ({ ok: true }),
+  };
+  const urls = {
+    chat: 'https://chatgpt.test/g/emily',
+    workspace: 'https://chatgpt.test/g/sofia',
+  };
+  const surface = {
+    getUrl: pane => urls[pane],
+    freshConversation: async pane => {
+      started.push(pane);
+      if (started.length === 2) signalBothStarted();
+      await freshGate;
+      return { ok: true, url: urls[pane] };
+    },
+    sendMessage: async pane => ({
+      ok: true,
+      pane,
+      method: 'button',
+      url: urls[pane] + '/c/new-' + pane,
+      userMessageId: 'user-' + pane,
+    }),
+    waitForAssistantMarker: async () => true,
+  };
+
+  const runtime = new PaneAgentRuntime({
+    instanceId: 'notebook',
+    missionId: 'MCF-DUAL-AGENT-IDENTITY-001',
+    broker,
+    surface,
+    agentBindings: bindings,
+    loadState: () => null,
+    saveState: () => {},
+  });
+
+  const pending = runtime.bootstrap({ force: true, parallel: true });
+  await Promise.race([
+    bothStarted,
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error('parallel_bootstrap_did_not_start_both_panes')),
+      250,
+    )),
+  ]);
+
+  assert.deepEqual([...started].sort(), ['chat', 'workspace']);
+  releaseFresh();
+
+  const result = await pending;
+  assert.equal(result.ok, true);
+  assert.equal(result.parallel, true);
+  assert.equal(result.agents.length, 2);
+  assert.equal(runtime.getIdentities().every(agent => agent.state === 'READY'), true);
+});
+
