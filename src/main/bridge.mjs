@@ -957,6 +957,24 @@ export class LocalAgentBridge {
           read('canonicalAgents', this.listCanonicalAgents),
         ]);
 
+        const paneStates = ['chat', 'workspace'].map((pane) => {
+          const wc = this.getPaneWebContents?.(pane);
+          if (!wc || wc.isDestroyed?.()) {
+            return {
+              pane,
+              url: null,
+              title: null,
+              loading: false,
+            };
+          }
+          return {
+            pane,
+            url: typeof wc.getURL === 'function' ? wc.getURL() : null,
+            title: typeof wc.getTitle === 'function' ? wc.getTitle() : null,
+            loading: typeof wc.isLoading === 'function' ? wc.isLoading() : false,
+          };
+        });
+
         const discovery = buildRuntimeDiscovery({
           instanceId: this.instanceId,
           agentProfile: this.agentProfile,
@@ -964,6 +982,7 @@ export class LocalAgentBridge {
           busy: this.busy,
           queueDepth: this.mutationQueue.length,
           paneAgents,
+          paneStates,
           agentSessions,
           canonicalAgents,
           warnings,
