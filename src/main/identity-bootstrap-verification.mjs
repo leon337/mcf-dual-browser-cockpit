@@ -228,6 +228,6 @@ export function buildAssistantMarkerProbe(marker) {
     'const turns=[...document.querySelectorAll("section[data-testid^=\\\"conversation-turn-\\\"], article[data-testid^=\\\"conversation-turn-\\\"]")];',
     'return turns.some(node=>{const text=textOf(node);return text.includes(marker)&&!text.includes(header);});',
     '})()',
-  ].join('\\n');
+  ].join('\n');
 }
 
