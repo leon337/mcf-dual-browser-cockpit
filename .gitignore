@@ -10,3 +10,9 @@ release/
 audio-test/
 test-artifact/
 whatsapp-dev-tutorial/
+
+dist/
+backups/
+*.bak*
+builder-debug.yml
+linux-unpacked/
