@@ -1,10 +1,121 @@
 import http from 'node:http';
+import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { promisify } from 'node:util';
 import { LiveAgentEventBus } from './live-agent-events.mjs';
 import { isGenerationStopControl } from './generation-control.mjs';
 import { buildRuntimeDiscovery } from './runtime-discovery.mjs';
+
+const execFileAsync = promisify(execFile);
+
+const ORCA_ATSPI_SNAPSHOT_SCRIPT = String.raw`
+import json, sys
+title = sys.argv[1] if len(sys.argv) > 1 else ""
+
+try:
+    import pyatspi
+except Exception:
+    print(json.dumps({"available": False, "error": "pyatspi_unavailable"}))
+    raise SystemExit(0)
+
+def children(node):
+    try:
+        count = min(max(int(node.childCount), 0), 200)
+    except Exception:
+        return []
+    result = []
+    for index in range(count):
+        try:
+            child = node.getChildAtIndex(index)
+            if child is not None:
+                result.append(child)
+        except Exception:
+            pass
+    return result
+
+def role_name(node):
+    try:
+        return str(node.getRoleName() or "")
+    except Exception:
+        return ""
+
+def node_name(node, field):
+    try:
+        return str(getattr(node, field, "") or "")
+    except Exception:
+        return ""
+
+root = pyatspi.Registry.getDesktop(0)
+app = None
+try:
+    app_count = int(root.childCount)
+except Exception:
+    app_count = 0
+for index in range(min(max(app_count, 0), 200)):
+    try:
+        candidate = root.getChildAtIndex(index)
+        if candidate is not None and "mcf-dual-browser" in node_name(candidate, "name").lower():
+            app = candidate
+            break
+    except Exception:
+        pass
+
+if app is None:
+    print(json.dumps({"available": True, "matched": False, "error": "dual_browser_app_not_found", "frameCandidates": [], "nodes": []}))
+    raise SystemExit(0)
+
+frame_candidates = []
+target = None
+stack = [(app, 0)]
+visited = 0
+while stack and visited < 5000:
+    node, depth = stack.pop()
+    visited += 1
+    role = role_name(node)
+    name = node_name(node, "name")
+    if role == "frame":
+        if len(frame_candidates) < 30:
+            frame_candidates.append(name[:200])
+        if name == title:
+            target = node
+            break
+    if depth < 50:
+        for child in reversed(children(node)):
+            stack.append((child, depth + 1))
+
+if target is None:
+    print(json.dumps({"available": True, "matched": False, "error": "browser_frame_not_found", "frameCandidates": frame_candidates, "nodes": []}))
+    raise SystemExit(0)
+
+nodes = []
+stack = [(target, None, 0)]
+while stack and len(nodes) < 1500:
+    node, parent_id, depth = stack.pop()
+    node_id = len(nodes) + 1
+    nodes.append({
+        "id": node_id,
+        "parentId": parent_id,
+        "role": role_name(node)[:100],
+        "name": node_name(node, "name")[:1000],
+        "description": node_name(node, "description")[:400],
+        "depth": depth,
+    })
+    if depth < 50:
+        for child in reversed(children(node)):
+            stack.append((child, node_id, depth + 1))
+
+print(json.dumps({
+    "available": True,
+    "matched": True,
+    "frameName": title,
+    "nodes": nodes,
+    "count": len(nodes),
+    "truncated": bool(stack),
+    "frameCandidates": frame_candidates,
+}, ensure_ascii=False))
+`;
 
 const MAX_BODY = 1024 * 1024;
 const MAX_MESSAGE = 16000;
@@ -1294,6 +1405,115 @@ export class LocalAgentBridge {
       if (req.method === 'GET' && requestUrl.pathname === '/v1/interactive') {
         const page = await wc.executeJavaScript(pageSelectorScript(), true);
         return json(res, 200, { ok: true, pane, page });
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/atspi') {
+        try {
+          const { stdout } = await execFileAsync('/usr/bin/python3', [
+            '-c',
+            ORCA_ATSPI_SNAPSHOT_SCRIPT,
+            wc.getTitle(),
+          ], {
+            timeout: 8000,
+            maxBuffer: 4 * 1024 * 1024,
+            windowsHide: true,
+          });
+          const snapshot = JSON.parse(stdout);
+          if (!snapshot.available) {
+            return json(res, 503, {
+              ok: false,
+              error: 'atspi_unavailable',
+              detail: String(snapshot.error || 'pyatspi_unavailable').slice(0, 200),
+            });
+          }
+          if (!snapshot.matched) {
+            return json(res, 404, {
+              ok: false,
+              error: snapshot.error || 'atspi_browser_frame_not_found',
+              pane,
+              page: { url: wc.getURL(), title: wc.getTitle() },
+              frameCandidates: snapshot.frameCandidates || [],
+            });
+          }
+          return json(res, 200, {
+            ok: true,
+            pane,
+            source: 'atspi-orca-accessibility-bus',
+            page: { url: wc.getURL(), title: wc.getTitle() },
+            ...snapshot,
+          });
+        } catch (error) {
+          return json(res, 503, {
+            ok: false,
+            error: 'atspi_accessibility_unavailable',
+            detail: String(error?.message || error).slice(0, 300),
+          });
+        }
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/accessibility') {
+        let attachedHere = false;
+        try {
+          if (!wc.debugger.isAttached()) {
+            wc.debugger.attach('1.3');
+            attachedHere = true;
+          }
+          const frameTreeResult = await wc.debugger.sendCommand('Page.getFrameTree');
+          const frames = [];
+          const collectFrames = (entry) => {
+            if (entry?.frame?.id) frames.push({ id: entry.frame.id, url: entry.frame.url || '' });
+            for (const child of entry?.childFrames || []) collectFrames(child);
+          };
+          collectFrames(frameTreeResult?.frameTree);
+          if (!frames.length) throw new Error('frame_tree_unavailable');
+
+          const nodes = [];
+          const warnings = [];
+          let count = 0;
+          for (const frame of frames) {
+            try {
+              const snapshot = await wc.debugger.sendCommand('Accessibility.getFullAXTree', { frameId: frame.id });
+              const rawNodes = Array.isArray(snapshot?.nodes) ? snapshot.nodes : [];
+              count += rawNodes.length;
+              const valueOf = (item) => item && typeof item === 'object' && 'value' in item ? item.value : null;
+              for (const node of rawNodes) {
+                if (nodes.length >= 3000) break;
+                const normalized = {
+                  id: node.nodeId ?? null,
+                  parentId: node.parentId ?? null,
+                  frameId: frame.id,
+                  frameUrl: frame.url,
+                  role: valueOf(node.role),
+                  name: valueOf(node.name),
+                  description: valueOf(node.description),
+                  ignored: Boolean(node.ignored),
+                  properties: Object.fromEntries((node.properties || []).map((property) => [property.name, valueOf(property.value)])),
+                };
+                if (!normalized.ignored && (normalized.role || normalized.name || normalized.description || Object.keys(normalized.properties).length)) nodes.push(normalized);
+              }
+            } catch (error) {
+              warnings.push({ frameId: frame.id, error: String(error?.message || error).slice(0, 180) });
+            }
+          }
+          return json(res, 200, {
+            ok: true,
+            pane,
+            source: 'chromium-accessibility-tree',
+            page: { url: wc.getURL(), title: wc.getTitle() },
+            frameCount: frames.length,
+            frames,
+            count,
+            truncated: count > 3000,
+            warnings,
+            nodes,
+          });
+        } catch (error) {
+          return json(res, 503, { ok: false, error: 'accessibility_tree_unavailable', detail: String(error?.message || error).slice(0, 300) });
+        } finally {
+          if (attachedHere && wc.debugger.isAttached()) {
+            try { wc.debugger.detach(); } catch {}
+          }
+        }
       }
 
       if (req.method === 'POST' && requestUrl.pathname === '/v1/navigate') {
