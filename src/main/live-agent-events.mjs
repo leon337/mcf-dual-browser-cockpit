@@ -80,6 +80,7 @@ export class LiveAgentEventBus {
     const {
       schema: _schema,
       eventId: _eventId,
+      sequence: _sequence,
       instanceId: _instanceId,
       agentProfile: _agentProfile,
       bootId: _bootId,
@@ -122,7 +123,6 @@ export class LiveAgentEventBus {
 
     if (!resetReason
         && parsed.sequence > 0
-        && this.entries.length
         && parsed.sequence < oldestSequence - 1) {
       resetReason = 'cursor_expired';
     }
