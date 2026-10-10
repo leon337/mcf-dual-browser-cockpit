@@ -28,7 +28,7 @@
     "asar": true,
     "files": [
       "src/**/*",
-      "agents/*.json",
+      "agents/**/*",
       "package.json",
       "README.md",
       "LICENSE"
