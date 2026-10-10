@@ -16,6 +16,12 @@ const instance = instanceConfig(process.argv, app.getPath('userData'));
 const agentBindings = agentBindingsForProfile(instance.agentProfile);
 mkdirSync(instance.userData, { recursive: true, mode: 0o700 });
 app.setPath('userData', instance.userData);
+// Keep Chromium's sessionData directory stable across app upgrades and launches.
+// Existing installations store persistent partitions under the app-level config
+// directory; moving it per build/profile would make saved website sessions vanish.
+const stableSessionData = path.dirname(path.dirname(instance.userData));
+mkdirSync(stableSessionData, { recursive: true, mode: 0o700 });
+app.setPath('sessionData', stableSessionData);
 const ownsInstance = app.requestSingleInstanceLock();
 if (!ownsInstance) app.exit(0);
 
@@ -39,6 +45,9 @@ let workspaceView = null;
 let workspaceAuxWindow = null;
 const agentSessionWindows = new Map();
 const agentSessionRuntime = new Map();
+// Stable persistent partitions keep browser cookies and site storage within this
+// instance profile; credentials are never exported to a plaintext session vault.
+const persistentBrowserSessions = new Map();
 let splitRatio = 0.5;
 let bridge = null;
 let paneAgentRuntime = null;
@@ -214,6 +223,7 @@ function scheduleRuntimeStatePersist(delay = 250) {
 
 function configureSession(partition, { chat = false } = {}) {
   const ses = session.fromPartition(partition);
+  persistentBrowserSessions.set(partition, ses);
 
   const currentUA = ses.getUserAgent();
   if (currentUA.includes('Electron/')) {
@@ -307,17 +317,62 @@ function secureWebContents(key, view, partition) {
     }
   });
 
+  const eventUrl = () => {
+    try {
+      const parsed = new URL(wc.getURL());
+      if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+      parsed.search = '';
+      parsed.hash = '';
+      return parsed.href;
+    } catch {
+      return null;
+    }
+  };
+  const publishNavigationEvent = (type, extra = {}) => bridge?.publishLiveEvent({
+    type,
+    source: 'WebContents',
+    authority: 'observational',
+    pane: key,
+    url: eventUrl(),
+    title: typeof wc.getTitle === 'function' ? wc.getTitle() : null,
+    loading: typeof wc.isLoading === 'function' ? wc.isLoading() : false,
+    ...extra,
+  });
+
   for (const eventName of ['did-start-loading', 'did-stop-loading', 'did-navigate', 'did-navigate-in-page']) {
-    wc.on(eventName, () => {
+    wc.on(eventName, (_event, navigationUrl, navigationArg) => {
       emitState(key, wc);
+      const typeByEvent = {
+        'did-start-loading': 'NAVIGATION_STARTED',
+        'did-stop-loading': 'NAVIGATION_FINISHED',
+        'did-navigate': 'NAVIGATED',
+        'did-navigate-in-page': 'IN_PAGE_NAVIGATION',
+      };
+      publishNavigationEvent(typeByEvent[eventName], {
+        navigationUrl: typeof navigationUrl === 'string' ? (() => {
+          try { const u = new URL(navigationUrl); u.search = ''; u.hash = ''; return ['http:', 'https:'].includes(u.protocol) ? u.href : null; } catch { return null; }
+        })() : eventUrl(),
+        isInPlace: eventName === 'did-navigate-in-page',
+        isMainFrame: eventName === 'did-navigate-in-page' ? Boolean(navigationArg) : true,
+      });
       if (eventName !== 'did-start-loading') scheduleRuntimeStatePersist();
     });
   }
-  wc.on('page-title-updated', () => emitState(key, wc));
+  wc.on('page-title-updated', (_event, title) => {
+    emitState(key, wc);
+    publishNavigationEvent('PAGE_TITLE_UPDATED', { title: String(title || wc.getTitle() || '').slice(0, 300) });
+  });
   wc.on('render-process-gone', (_event, details) => {
+    publishNavigationEvent('RENDERER_CRASHED', { reason: String(details?.reason || 'unknown').slice(0, 100), exitCode: Number.isFinite(details?.exitCode) ? details.exitCode : null });
     emitBridgeEvent({ level: 'error', message: `${key}: renderer encerrado (${details.reason}).` });
   });
   wc.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (errorCode !== -3) publishNavigationEvent('NAVIGATION_FAILED', {
+      errorCode: Number.isFinite(errorCode) ? errorCode : null,
+      error: String(errorDescription || '').slice(0, 240),
+      failedUrl: (() => { try { const u = new URL(validatedURL); u.search = ''; u.hash = ''; return ['http:', 'https:'].includes(u.protocol) ? u.href : null; } catch { return null; } })(),
+      isMainFrame: Boolean(isMainFrame),
+    });
     if (!isMainFrame || errorCode === -3) return;
     emitBridgeEvent({ level: 'error', message: `${key}: falha de carregamento (${errorCode}).` });
   });
@@ -2155,10 +2210,26 @@ app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 
-app.on('before-quit', async () => {
+let quitAfterSessionFlush = false;
+app.on('before-quit', (event) => {
+  if (quitAfterSessionFlush) return;
+  event.preventDefault();
   if (runtimePersistTimer) { clearTimeout(runtimePersistTimer); runtimePersistTimer = null; }
   try { persistRuntimeState(); } catch {}
-  await bridge?.stop().catch(() => {});
+  // Flush persistent Chromium storage before exit; reopening the same instance
+  // ID restores cookies and site sessions without copying them across profiles.
+  for (const ses of persistentBrowserSessions.values()) {
+    try { ses.flushStorageData(); } catch (error) {
+      console.error('Falha ao descarregar armazenamento da sessão:', error.message);
+    }
+  }
+  Promise.allSettled([...persistentBrowserSessions.values()].map((ses) =>
+    ses.cookies?.flushStore ? ses.cookies.flushStore() : Promise.resolve()
+  )).then(async () => {
+    await bridge?.stop().catch(() => {});
+    quitAfterSessionFlush = true;
+    app.quit();
+  });
 });
 
 app.on('window-all-closed', () => {
