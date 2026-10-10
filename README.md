@@ -1,285 +1,215 @@
 # MCF Dual Browser Cockpit
 
-Execution Surface desktop do ecossistema **MCF — Multiagent Collaboration Framework**.
+Aplicação desktop para manter **duas superfícies de navegação independentes** na mesma janela:
 
-O Cockpit mantém dois contextos isolados em uma única janela:
+- **LEANDRO / ChatGPT** à esquerda — sessão persistente própria;
+- **MESTRE / Workspace** à direita — navegador operacional isolado;
+- divisor redimensionável e presets 65/35, 50/50 e 35/65;
+- histórico, voltar/avançar, recarregar, DevTools e abertura externa por painel;
+- downloads separados;
+- captura da área operacional;
+- **Agent Bridge local opcional**, desligado por padrão, para um runtime autorizado controlar somente o navegador da direita.
 
-- **LEANDRO / ChatGPT** — sessão persistente do usuário;
-- **MESTRE · WORKSPACE** — Chromium/WebContentsView operacional para navegação e artefatos.
+## Por que esta arquitetura
 
-## Estado deste repositório
+O app usa **Electron 44.2.0 + Chromium 152 + `WebContentsView`**. Não usa `BrowserView` (obsoleto) nem a tag `<webview>` antiga. A casca do cockpit é HTML/CSS/JavaScript nativo para reduzir dependências e tempo de inicialização.
 
-Este repositório contém o código-fonte publicável do protótipo local atualmente validado no Linux.  
-O repositório canônico de governança do MCF continua sendo:
+Não tentamos encaixar o executável inteiro do Brave ou Firefox dentro da janela. Electron já entrega um Chromium embutido e controlável por processo. Isso permite isolamento de sessão e automação de forma muito mais previsível.
 
-https://github.com/leon337/multiagent-collaboration-framework
+## MVP implementado
 
-O Cockpit é uma **Execution Surface**; ele não substitui o Mission Runtime ou a governança do MCF.
+```text
+BrowserWindow (casca do cockpit)
+│
+├── WebContentsView: persist:mcf-chatgpt
+│   └── https://chatgpt.com/
+│
+├── WebContentsView: persist:mcf-workspace
+│   └── navegador operacional
+│
+├── IPC mínimo e tipado por superfície
+│   ├── layout
+│   ├── navegação
+│   ├── captura
+│   └── Agent Bridge
+│
+└── LocalAgentBridge [OFF por padrão]
+    ├── 127.0.0.1 somente
+    ├── token aleatório por execução
+    ├── sem CORS de páginas web
+    └── sem endpoint de JavaScript arbitrário
+```
 
-## Capacidades atuais
+## Requisitos
 
-- Electron 44 + WebContentsView;
-- partitions persistentes e isoladas;
-- restauração de URLs, janela e split;
-- Agent Bridge local em loopback com token efêmero;
-- navegação programática multipainel para `chat` (EMILLY) e `workspace` (SOPHIA);
-- leitura de estado, texto e elementos interativos por pane;
-- ações `navigate`, `action`, `find-click`, `click`, `type`, `pointer`, `upload-file` e `capture` endereçáveis por pane;
-- ação semântica `/v1/find-click`, inclusive em frames, sem exportar o DOM inteiro;
-- captura por pane; o Workspace mantém o capturador nativo compartilhado e o Chat usa captura direta do WebContents;
-- integração com ORCA/AT-SPI para observação semântica;
-- áudio via PipeWire/PulseAudio em Linux;
-- AppImage Linux e targets Windows via electron-builder.
+- Windows 10/11 x64 ou Linux x64;
+- Node.js 22.12+ para desenvolvimento;
+- conexão com a internet para baixar Electron na primeira instalação e para navegar.
 
-## Segurança
-
-O repositório **não contém** cookies, sessões, tokens de usuário ou credenciais locais.
-
-O Agent Bridge:
-
-- escuta apenas em `127.0.0.1`;
-- usa token aleatório por execução;
-- não deve ser exposto diretamente à rede;
-- deve preferir ações semânticas/programáticas (`find-click`, `click`, `type`, `navigate`) a coordenadas físicas;
-- `/v1/pointer` permanece compatível, mas não é o caminho autorizado do MESTRE quando existe alternativa semântica;
-- deve permanecer sujeito à governança e aos gates do MCF.
-
-## Desenvolvimento
+## Executar em desenvolvimento
 
 ```bash
 npm install
-npm run check
 npm start
 ```
 
-Build Linux:
+## Validar sintaxe
 
 ```bash
-npm run dist:linux
+npm run check
 ```
 
-Build Windows:
+## Gerar executável Windows
 
 ```bash
+npm install
 npm run dist:win
 ```
 
-## Relação com o MCF
+Os artefatos serão criados em `release/` (instalador NSIS e versão portable x64).
 
-```text
-MCF Mission Runtime / governança
-            |
-            v
-MCF Dual Browser Cockpit
-            |
-            v
-Workspace / artefatos / navegação programática
+## Gerar AppImage Linux
+
+```bash
+npm install
+npm run dist:linux
 ```
 
-## Licença
+## Sessões e dados
 
-MIT.
+O Electron mantém duas partições persistentes separadas:
 
-## Versão 0.3.0
+```text
+persist:mcf-chatgpt
+persist:mcf-workspace
+```
 
-Consulte [instâncias e pausa](docs/INSTANCIAS.md), [auditoria](docs/missions/MCF-DUAL-AUDIT-20260922/AUDIT.md) e [validação](docs/missions/MCF-DUAL-AUDIT-20260922/VALIDATION.md). A Bridge inicia ligada, autenticada e limitada a loopback.
+Cookies, cache, storage e sessão do ChatGPT não são compartilhados automaticamente com o Workspace.
 
+Downloads:
 
-## Agent Bridge multipainel
+```text
+Downloads/MCF-ChatGPT/
+Downloads/MCF-Workspace/
+```
+
+Capturas:
+
+```text
+Pictures/MCF-Cockpit-Captures/
+```
+
+## Agent Bridge local
+
+O botão `AGENT BRIDGE OFF` liga uma API HTTP **somente em `127.0.0.1`**. Se a porta padrão `47831` estiver ocupada, o app escolhe outra porta local.
+
+Ao ativar, um token aleatório é criado para a execução. Use o botão `⧉` para copiá-lo.
+
+Header obrigatório nas chamadas de controle:
 
-Rotas de leitura aceitam o pane por query string:
+```text
+Authorization: Bearer <TOKEN>
+```
 
-    GET /v1/state?pane=chat
-    GET /v1/text?pane=workspace
-    GET /v1/interactive?pane=chat
-
-Rotas de ação aceitam o pane no JSON:
-
-    {"pane":"chat", ...}
-    {"pane":"workspace", ...}
-
-Aliases aceitos:
-- `chat`, `emilly`, `emily` -> painel EMILLY;
-- `workspace`, `sophia`, `sofia` -> painel SOPHIA.
-
-Quando `pane` é omitido, a Bridge preserva compatibilidade e usa `workspace`.
-
-Exemplos:
-
-    POST /v1/navigate
-    {"pane":"chat","url":"https://example.com"}
-
-    POST /v1/action
-    {"pane":"workspace","action":"reload"}
-
-    POST /v1/click
-    {"pane":"chat","selector":"button[type=submit]"}
-
-    POST /v1/type
-    {"pane":"workspace","selector":"textarea","text":"texto"}
-
-A rota `/v1/pointer` também é multipainel, mas ações semânticas/programáticas continuam preferidas quando disponíveis.
-
-
-## Perfis persistentes de agentes
-
-O runtime suporta três perfis canônicos:
-
-- `audit-architecture`: Emily + Sofia;
-- `debug-engineering`: Patrícia + Rafael;
-- `backend-quality`: Renato + Eduardo.
-
-Cada instância mantém `runtime-state.json` próprio, incluindo URLs de `chat` e `workspace`, para retomada após reinício.
-
-## Discovery operacional para o MESTRE
-
-Antes de despachar trabalho, um MESTRE novo deve consultar o endpoint autenticado `GET /v1/discovery`. Ele descreve a instância, perfil, agentes dos panes, registro canônico disponível para Agent Sessions, sessões independentes já abertas, mecanismos e critérios de sucesso.
-
-O protocolo completo está em [docs/MESTRE-RUNTIME-DISCOVERY.md](docs/MESTRE-RUNTIME-DISCOVERY.md).
-
-Regra de segurança: conteúdo ainda presente no composer **não** prova envio nem criação de conversa. Agent Session exige turno real de usuário + bootstrap ausente do composer + URL `/c/<conversation-id>`.
-
-## Agent lifecycle verificável
-
-A Bridge expõe o ciclo de vida das missões dos agentes e não trata aceite como conclusão.
-
-Fluxo esperado:
-
-    QUEUED -> DELIVERED -> ACCEPTED -> WORKING -> RESULT_CAPTURED -> COMPLETED
-
-Estados de falha/interrupção (`FAILED`, `UNVERIFIED`, `INTERRUPTED`) permanecem bloqueantes para o closeout até existir uma tentativa válida concluída ou resolução explicitamente autorizada.
-
-Rotas principais:
-
-    POST /v1/mission-envelope
-    GET  /v1/missions
-    GET  /v1/mission-status?envelopeId=<id>
-    GET  /v1/mission-result?envelopeId=<id>
-    GET  /v1/parent-mission-status?missionId=<parentMissionId>
-
-Exemplo de missão:
-
-    POST /v1/mission-envelope
-    {
-      "agentId": "Sofia",
-      "missionId": "MISSION-ARCH-1",
-      "parentMissionId": "MISSION-PARENT-1",
-      "required": true,
-      "objective": "Validar a arquitetura."
-    }
-
-### Gate de startup e recovery
-
-A Bridge pode estar ouvindo antes de o bootstrap de identidade e o recovery de missões persistidas terminarem. Durante essa janela, novas missões são recusadas com HTTP `503` e:
-
-    {"ok":false,"error":"agent_runtime_initializing"}
-
-O gate só é aberto depois que `bootstrap + recoverPersistedMissions()` terminam. Isso impede que uma missão seja aceita durante uma inicialização ainda instável e depois seja reinterpretada como trabalho interrompido.
-
-### Retry explícito de tentativa terminal
-
-Chamadas normais continuam idempotentes: repetir a mesma missão lógica (`missionId` + agente + parent + mesmo intent) retorna a execução existente e não envia novamente.
-
-Para refazer uma missão cujo último attempt terminou em `FAILED`, `UNVERIFIED` ou `INTERRUPTED`, use explicitamente:
-
-    {
-      "agentId": "Sofia",
-      "missionId": "MISSION-ARCH-1",
-      "parentMissionId": "MISSION-PARENT-1",
-      "objective": "Validar a arquitetura.",
-      "retryFailed": true
-    }
-
-O retry só cria nova execução quando não existe attempt ativo nem `COMPLETED`. A nova execução recebe novo `envelopeId` e `executionId`, registra `attemptNumber` e `retryOfEnvelopeId`, e continua pertencendo ao mesmo `missionId` lógico.
-
-`parentMissionStatus` agrupa attempts pelo `missionId` lógico. Portanto, um retry aumenta `attempts`, mas não aumenta `required`.
-
-### Critério terminal e evidência visual
-
-`RESULT_CAPTURED` exige identidade de mensagem final, vínculo com o turno entregue, SHA-256, persistência/read-back e prova terminal positiva. Para o sinal UI, o runtime exige geração inativa, ações finais observadas e estabilidade mínima.
-
-Marcadores transitórios como `request-placeholder-*`, `Pensando`/`Thinking` e estados visíveis de interrupção não são resultados terminais.
-
-Em validações operacionais de lifecycle, o MESTRE deve cruzar:
-
-    estado interno / receipts
-    + DOM / WebContents
-    + screenshot da interface visível
-
-Uma divergência entre essas camadas bloqueia o closeout até ser explicada ou corrigida.
-
-
-## Canal live MESTRE ↔ agentes — v0.6.0
-
-A Bridge expõe um canal de eventos semânticos **read-only**, autenticado e isolado por instância. O runtime de missões continua sendo a única fonte de verdade; o stream não executa missões nem decide terminalidade.
-
-Rotas:
-
-    GET /v1/live/snapshot
-    GET /v1/live/stream
-
-Headers obrigatórios:
-
-    Authorization: Bearer <bridge-token>
-    X-MCF-Instance: <instance-id>
-
-O stream também exige:
-
-    Accept: text/event-stream
-
-O token nunca é aceito em query string. Host inválido, Origin de navegador, token ausente/inválido e instância divergente continuam falhando fechados.
-
-### Snapshot
-
-/v1/live/snapshot retorna:
-
-- instanceId e agentProfile;
-- bootId;
-- highWatermarkEventId;
-- buffer replayável recente;
-- identidades atuais;
-- missões atuais.
-
-Para evitar perda na fronteira snapshot → stream, o consumidor deve guardar highWatermarkEventId e abrir o stream a partir desse cursor. Eventos ocorridos durante a leitura do snapshot podem reaparecer no replay; o consumidor deduplica por eventId.
-
-### SSE e replay
-
-Os IDs têm o formato:
-
-    <bootId>:<sequence>
-
-O buffer é bounded por quantidade, idade e bytes. Heartbeats são comentários SSE e não avançam cursor.
-
-Quando o cursor ainda existe no mesmo boot, somente eventos posteriores são reproduzidos. Se o cursor expirou, é inválido ou pertence a outro boot, o stream emite channel.replay_reset explicitamente. O cliente deve reconciliar por snapshot em vez de presumir continuidade.
-
-Eventos principais:
-
-- BRIDGE_STARTED / BRIDGE_STOPPING;
-- PANE_STATE — observacional;
-- AGENT_RECEIPT — autoritativo;
-- MISSION_STATE — autoritativo, incluindo WORKING, RESULT_CAPTURED, COMPLETED e falhas.
-
-Um evento MISSION_STATE terminal transporta a correlação da missão e, quando disponível, o resultado final com conversationId, assistantMessageId, linkedUserMessageId, resultSha256 e texto bounded.
-
-### Regra terminal
-
-O fluxo continua:
-
-    QUEUED -> DELIVERED -> ACCEPTED -> WORKING -> RESULT_CAPTURED -> COMPLETED
-
-O stream não altera essa máquina. Estado é persistido antes de ser publicado. COMPLETED só aparece depois do read-back e validação de integridade já exigidos pelo lifecycle.
-
-Mudança de conversa durante a observação do resultado falha fechada como UNVERIFIED e libera a fila do pane, evitando WORKING infinito. Uma geração iniciada em turno posterior não mantém artificialmente uma resposta anterior como não-terminal.
-
-### Topologia multi-instância
-
-Cada instância possui seu próprio:
-
-- processo/Bridge;
-- token;
-- bootId;
-- journal;
-- ring buffer;
-- runtime state.
-
-MESTRE multiplexa os streams de notebook e notebook-team2 no cliente. Não existe broker cross-instance nem fallback silencioso.
+Endpoints:
+
+| Método | Endpoint | Função |
+|---|---|---|
+| GET | `/health` | saúde da bridge; sem controle |
+| GET | `/v1/state` | URL, título, loading e histórico |
+| GET | `/v1/text` | texto visível da página |
+| GET | `/v1/interactive` | elementos clicáveis/editáveis + seletores |
+| POST | `/v1/navigate` | abre uma URL HTTP(S) |
+| POST | `/v1/action` | back, forward, reload ou stop |
+| POST | `/v1/click` | clica por seletor CSS |
+| POST | `/v1/type` | preenche input/textarea/contenteditable |
+| POST | `/v1/pointer` | clique por coordenada no Workspace |
+| POST | `/v1/capture` | salva screenshot do Workspace |
+
+Exemplo de navegação:
+
+```bash
+curl -X POST http://127.0.0.1:47831/v1/navigate \
+  -H "Authorization: Bearer SEU_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com"}'
+```
+
+O bridge rejeita requisições que tragam um header `Origin`, reduzindo a possibilidade de uma página web tentar usar a API local.
+
+## Segurança implementada
+
+- `contextIsolation: true`;
+- `sandbox: true`;
+- `nodeIntegration: false`;
+- `webviewTag: false`;
+- `webSecurity: true`;
+- CSP rígida na casca do cockpit;
+- protocolos fora de HTTP(S) saem para o sistema operacional;
+- Workspace sem permissões de câmera/microfone/geolocalização por padrão;
+- ChatGPT recebe apenas um conjunto restrito de permissões para domínios ChatGPT/OpenAI;
+- Agent Bridge fica desligada por padrão, presa ao loopback e protegida por token efêmero;
+- nenhum endpoint de avaliação arbitrária de código.
+
+## Limitações atuais
+
+1. **MESTRE ainda precisa de um runtime/connector para chamar a Agent Bridge.** O app cria a superfície e o contrato local, mas uma sessão normal do ChatGPT não ganha acesso mágico ao `127.0.0.1` do computador.
+2. Alguns provedores OAuth podem bloquear login em navegadores embutidos. O app permite janelas HTTPS de autenticação, mas políticas externas podem variar.
+3. O MVP possui uma aba operacional por lado. Multi-tab real é a evolução natural da V0.3.
+4. Iframes cross-origin não podem ser inspecionados pelo endpoint DOM do bridge; clique por coordenadas e captura continuam disponíveis.
+
+## Próxima evolução sugerida
+
+### V0.3
+
+- múltiplas abas reais no Workspace;
+- fila de ações e botão de parada do agente;
+- Human Gate na própria interface;
+- painel de evidências/screenshot antes e depois;
+- downloads visíveis;
+- bookmarks e histórico persistente;
+- adaptador MCP/MCF sobre o `LocalAgentBridge`;
+- allowlist/denylist de domínios por missão;
+- gravação de receipts das ações do navegador.
+
+### V0.4
+
+- integração com Voice Hub;
+- canal de eventos do MCF;
+- missão, agente ativo e handoff na barra superior;
+- visualização de execução em graph/loop;
+- recuperação de sessão e checkpoint.
+
+## Estrutura
+
+```text
+mcf-dual-browser-cockpit/
+├── package.json
+├── README.md
+├── LICENSE
+└── src/
+    ├── main/
+    │   ├── main.mjs
+    │   └── bridge.mjs
+    ├── preload/
+    │   └── preload.cjs
+    └── renderer/
+        ├── index.html
+        ├── styles.css
+        └── renderer.js
+```
+
+## Observação MCF
+
+Este projeto é um **cockpit/Execution Surface**, não uma nova fonte de verdade do MCF. A integração futura deve consumir contratos do runtime e registrar evidências/receipts sem duplicar a governança canônica.
+
+
+## Streaming de eventos em tempo real
+
+A Agent Bridge oferece um canal Server-Sent Events (SSE) autenticado e mantido aberto, com replay por cursor e heartbeat:
+
+- `GET /v1/live/stream` (alias: `/v1/events`): conexão SSE persistente; exige `Authorization: Bearer <token>`, `X-MCF-Instance: <instanceId>` e `Accept: text/event-stream`.
+- `GET /v1/live/snapshot?after=<bootId:sequence>` (alias: `/v1/events/snapshot`): recupera eventos perdidos usando cursor.
+- Eventos de navegação: `NAVIGATION_STARTED`, `NAVIGATION_FINISHED`, `NAVIGATED`, `IN_PAGE_NAVIGATION`, `PAGE_TITLE_UPDATED`, `NAVIGATION_FAILED` e `RENDERER_CRASHED`, além dos eventos de estado e do runtime de agentes.
+- A URL publicada nos novos eventos remove query strings e fragmentos para reduzir exposição acidental de parâmetros sensíveis.
+- O canal é limitado a loopback e requer token efêmero; não exponha a porta à rede pública.
