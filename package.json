@@ -15,7 +15,7 @@
     "dist": "electron-builder",
     "dist:win": "electron-builder --win nsis portable",
     "dist:linux": "electron-builder --linux AppImage",
-    "check": "node --check src/main/main.mjs && node --check src/main/bridge.mjs && node --check src/main/live-agent-events.mjs && node --check src/preload/preload.cjs",
+    "check": "node --check src/main/main.mjs && node --check src/main/bridge.mjs && node --check src/main/live-agent-events.mjs && node --check src/preload/preload.cjs && node --check src/main/control-settings.mjs",
     "test": "npm run check && node --test test/*.test.mjs"
   },
   "devDependencies": {

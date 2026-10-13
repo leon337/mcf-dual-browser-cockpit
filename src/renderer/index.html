@@ -23,6 +23,10 @@
       <button class="chip" data-preset="mestre" title="Mais espaço para o navegador operacional">MESTRE 65%</button>
     </div>
 
+    <button id="controlCenterButton" class="control-entry" title="Abrir configurações e observabilidade" aria-expanded="false">
+      <span aria-hidden="true">☷</span><span>CONTROLE</span>
+    </button>
+
     <div class="app-actions">
       <span class="security"><span class="dot ok"></span>sessões isoladas</span>
       <button id="bridgeButton" class="bridge-button" title="Ativa API local para automação do navegador da direita">
@@ -72,6 +76,132 @@
       </div>
     </div>
   </section>
+
+  <main id="controlCenter" class="control-center hidden" aria-label="Painel de configurações e observabilidade">
+    <aside class="control-sidebar">
+      <div class="control-side-brand">
+        <div class="control-side-logo">MCF</div>
+        <div><strong>CONTROL PLANE</strong><span>cockpit local</span></div>
+      </div>
+      <div class="sidebar-section-label">MONITORAMENTO</div>
+      <nav class="control-nav" aria-label="Seções do painel">
+        <button class="control-tab active" data-control-tab="overview" aria-selected="true"><span>◫</span><span><strong>Visão geral</strong><small>Saúde da execução</small></span></button>
+        <button class="control-tab" data-control-tab="observability" aria-selected="false"><span>⌁</span><span><strong>Observabilidade</strong><small>Eventos, missões e agentes</small></span></button>
+        <div class="sidebar-section-label settings-label">PREFERÊNCIAS</div>
+        <button class="control-tab" data-control-tab="settings" aria-selected="false"><span>⚙</span><span><strong>Configurações</strong><small>Inicialização e atualização</small></span></button>
+      </nav>
+      <div class="control-sidebar-footer">
+        <span class="local-indicator"><span class="dot ok"></span>processamento local</span>
+        <span id="appVersion" class="version-pill">v0.7.0</span>
+        <small>Sem envio de telemetria externa.</small>
+      </div>
+    </aside>
+
+    <section class="control-main">
+      <header class="control-header">
+        <div>
+          <div class="eyebrow">MCF / EXECUTION SURFACE</div>
+          <h1 id="controlTitle">Visão geral</h1>
+          <p id="controlDescription">Estado operacional do cockpit, bridge e runtime local.</p>
+        </div>
+        <div class="control-header-actions">
+          <span id="lastRefresh" class="last-refresh">Aguardando leitura</span>
+          <button id="refreshControlButton" class="secondary-button">↻ Atualizar</button>
+          <button id="closeControlCenter" class="primary-button">← Voltar ao cockpit</button>
+        </div>
+      </header>
+
+      <div class="control-scroll">
+        <section class="control-page" data-control-page="overview">
+          <div class="metrics-grid">
+            <article class="metric-card"><div class="metric-label">AGENT BRIDGE</div><div id="bridgeMetric" class="metric-value">—</div><div id="bridgeMetricNote" class="metric-note">Verificando serviço local</div></article>
+            <article class="metric-card"><div class="metric-label">RUNTIME LOCAL</div><div id="runtimeMetric" class="metric-value">—</div><div id="runtimeMetricNote" class="metric-note">Verificando inicialização</div></article>
+            <article class="metric-card"><div class="metric-label">AGENTES VINCULADOS</div><div id="agentsMetric" class="metric-value">—</div><div id="agentsMetricNote" class="metric-note">Verificando identidades</div></article>
+            <article class="metric-card"><div class="metric-label">MISSÕES</div><div id="missionsMetric" class="metric-value">—</div><div id="missionsMetricNote" class="metric-note">Estado persistido do runtime</div></article>
+          </div>
+
+          <div class="control-grid two-columns">
+            <article class="panel-card">
+              <div class="panel-heading"><div><h2>Estado da execução</h2><p>Indicadores atuais da instância.</p></div><span class="panel-icon">◈</span></div>
+              <div id="overviewStatusList" class="status-list"><div class="empty-state">Carregando estado operacional…</div></div>
+            </article>
+            <article class="panel-card">
+              <div class="panel-heading"><div><h2>Atividade recente</h2><p>Últimos eventos sem conteúdo de mensagem ou credenciais.</p></div><button class="text-button" data-open-tab="observability">Ver tudo ↗</button></div>
+              <div id="overviewEvents" class="event-list compact-list"><div class="empty-state">Aguardando eventos.</div></div>
+            </article>
+          </div>
+          <div class="privacy-note"><span>ⓘ</span><span>O painel resume estados e metadados operacionais. Tokens, textos das conversas e corpos completos dos resultados não são exibidos aqui.</span></div>
+        </section>
+
+        <section class="control-page hidden" data-control-page="observability">
+          <div class="control-grid two-columns">
+            <article class="panel-card">
+              <div class="panel-heading"><div><h2>Instância e bridge</h2><p>Transporte local e fila de ações.</p></div><span class="panel-icon">⌘</span></div>
+              <div id="bridgeDetailList" class="status-list"><div class="empty-state">Carregando bridge…</div></div>
+            </article>
+            <article class="panel-card">
+              <div class="panel-heading"><div><h2>Painéis do navegador</h2><p>Disponibilidade e navegação atual (parâmetros removidos).</p></div><span class="panel-icon">▤</span></div>
+              <div id="paneList" class="pane-list"><div class="empty-state">Carregando painéis…</div></div>
+            </article>
+          </div>
+          <div class="control-grid two-columns">
+            <article class="panel-card">
+              <div class="panel-heading"><div><h2>Agentes e identidades</h2><p>Estado do vínculo e handshake canônico.</p></div><span id="agentCountLabel" class="count-pill">0</span></div>
+              <div id="agentList" class="record-list"><div class="empty-state">Nenhuma identidade observada.</div></div>
+            </article>
+            <article class="panel-card">
+              <div class="panel-heading"><div><h2>Missões recentes</h2><p>Máquina de estados e sinais de recuperação.</p></div><span id="missionCountLabel" class="count-pill">0</span></div>
+              <div id="missionList" class="record-list"><div class="empty-state">Nenhuma missão registrada.</div></div>
+            </article>
+          </div>
+          <article class="panel-card full-panel">
+            <div class="panel-heading"><div><h2>Feed de eventos</h2><p>Eventos locais em ordem cronológica reversa.</p></div><span id="eventCountLabel" class="count-pill">0</span></div>
+            <div id="eventFeed" class="event-list"><div class="empty-state">Nenhum evento no buffer.</div></div>
+          </article>
+          <article class="panel-card full-panel">
+            <div class="panel-heading"><div><h2>Receipts recentes</h2><p>Registros resumidos de evidência; payloads completos são mantidos fora desta visualização.</p></div><span id="receiptCountLabel" class="count-pill">0</span></div>
+            <div id="receiptList" class="record-list"><div class="empty-state">Nenhum receipt disponível.</div></div>
+          </article>
+        </section>
+
+        <section class="control-page hidden" data-control-page="settings">
+          <div class="settings-intro"><div class="settings-mark">⚙</div><div><h2>Configurações do cockpit</h2><p>Preferências locais para inicialização, layout e observabilidade.</p></div></div>
+          <form id="settingsForm" class="settings-form">
+            <section class="settings-section">
+              <div class="settings-section-title"><span class="settings-section-icon">◉</span><div><h3>Agent Bridge</h3><p>Controle da API local usada por clientes autorizados.</p></div></div>
+              <label class="setting-toggle"><span><strong>Iniciar a bridge ao abrir o aplicativo</strong><small>Desativar mantém a UI e o runtime local disponíveis, sem abrir a API HTTP. A alteração vale na próxima inicialização.</small></span><input id="settingsStartBridge" type="checkbox" /></label>
+              <div class="form-row">
+                <label for="settingsPort"><strong>Porta preferencial</strong><small>Usada na próxima ativação; se estiver ocupada, uma porta livre será escolhida.</small></label>
+                <input id="settingsPort" type="number" min="1024" max="65535" step="1" required />
+              </div>
+            </section>
+            <section class="settings-section">
+              <div class="settings-section-title"><span class="settings-section-icon">▥</span><div><h3>Experiência do cockpit</h3><p>Define o layout ao abrir e como o painel se atualiza.</p></div></div>
+              <div class="form-row">
+                <label for="settingsLayout"><strong>Layout padrão</strong><small>Aplicado ao iniciar e ao salvar as preferências.</small></label>
+                <select id="settingsLayout"><option value="balanced">Equilibrado · 50 / 50</option><option value="leandro">ChatGPT · 65 / 35</option><option value="mestre">Workspace · 65 / 35</option></select>
+              </div>
+              <div class="form-row">
+                <label for="settingsRefresh"><strong>Atualização de observabilidade</strong><small>Intervalo automático enquanto o painel estiver aberto.</small></label>
+                <select id="settingsRefresh"><option value="2000">2 segundos</option><option value="3000">3 segundos</option><option value="5000">5 segundos</option><option value="10000">10 segundos</option></select>
+              </div>
+              <div class="form-row">
+                <label for="settingsEventLimit"><strong>Histórico visível</strong><small>Limite de eventos e receipts exibidos no painel.</small></label>
+                <select id="settingsEventLimit"><option value="25">25 registros</option><option value="50">50 registros</option><option value="100">100 registros</option></select>
+              </div>
+            </section>
+            <section class="settings-section info-settings">
+              <div class="settings-section-title"><span class="settings-section-icon">ⓘ</span><div><h3>Instância ativa</h3><p>Dados de identificação em uso nesta janela.</p></div></div>
+              <div class="identity-grid"><div><small>Instance ID</small><strong id="settingsInstance">—</strong></div><div><small>Perfil de agentes</small><strong id="settingsProfile">—</strong></div><div><small>Versão</small><strong id="settingsVersion">—</strong></div></div>
+              <p class="settings-hint">O perfil de agentes é definido na inicialização por <code>--agent-profile</code>. Esta tela não o altera no meio de uma sessão.</p>
+            </section>
+            <div class="settings-actions"><span id="settingsStatus" role="status" aria-live="polite">Preferências carregadas do perfil local.</span><button type="submit" id="saveSettingsButton" class="primary-button">Salvar configurações</button></div>
+          </form>
+          <div class="privacy-note"><span>🔒</span><span>Configurações armazenadas localmente no diretório de dados da instância. Não há integração de telemetria externa. A porta da bridge continua limitada a 127.0.0.1.</span></div>
+        </section>
+      </div>
+    </section>
+  </main>
 
   <div id="stageDivider" class="stage-divider"><span></span></div>
 

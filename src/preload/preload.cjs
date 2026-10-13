@@ -4,6 +4,11 @@ contextBridge.exposeInMainWorld('cockpit', {
   layout: {
     setSplit: (ratio) => ipcRenderer.invoke('layout:set-split', ratio),
     preset: (preset) => ipcRenderer.invoke('layout:preset', preset),
+    setMode: (mode) => ipcRenderer.invoke('layout:set-mode', mode),
+  },
+  settings: {
+    get: () => ipcRenderer.invoke('settings:get'),
+    save: (settings) => ipcRenderer.invoke('settings:save', settings),
   },
   browser: {
     navigate: (pane, input) => ipcRenderer.invoke('browser:navigate', pane, input),
@@ -23,6 +28,7 @@ contextBridge.exposeInMainWorld('cockpit', {
     pause: () => ipcRenderer.invoke('bridge:pause'),
     toggle: () => ipcRenderer.invoke('bridge:toggle'),
     getState: () => ipcRenderer.invoke('bridge:get-state'),
+    getObservability: () => ipcRenderer.invoke('bridge:get-observability'),
     copyToken: () => ipcRenderer.invoke('bridge:copy-token'),
     onEvent: (listener) => {
       const wrapped = (_event, payload) => listener(payload);
