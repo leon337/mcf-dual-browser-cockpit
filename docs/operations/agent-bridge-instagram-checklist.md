@@ -7,7 +7,7 @@ Identificar sem ambiguidade a instância do MCF Dual Browser Cockpit que control
 - [x] Confirmar que a bridge na porta `44993` responde em `/health`.
 - [x] Confirmar que as bridges nas portas `47831` e `43325` também respondem; não presumir que pertencem à mesma instância.
 - [x] Identificar o mecanismo oficial de token via `cockpit.bridge.getState()` / `cockpit.bridge.copyToken()` no IPC do cockpit.
-- [ ] Mapear cada porta de bridge à instância Electron correspondente, sem expor tokens.
+- [x] Mapear a porta `44993` à instância Electron `--instance=principal` (PID 518286), via `sudo ss -ltnp` e `/proc/<pid>/cmdline`; tokens não foram expostos.
 - [ ] Obter o token somente da instância associada à porta `44993`.
 - [ ] Enviar `POST /v1/navigate` para `https://www.instagram.com/`.
 - [ ] Consultar `GET /v1/state` e validar URL e título resultantes.
@@ -20,9 +20,12 @@ Identificar sem ambiguidade a instância do MCF Dual Browser Cockpit que control
 - Não declarar a navegação concluída sem confirmação do estado retornado pela bridge.
 - Após validar a navegação, avançar para a próxima etapa da missão e atualizar este checklist.
 
-## Estado inicial verificado
+## Estado verificado
 - `44993/health`: HTTP 200; serviço `mcf-dual-browser-agent-bridge`.
 - `47831/health`: HTTP 200; serviço `mcf-dual-browser-agent-bridge`.
 - `43325/health`: HTTP 200; serviço `mcf-dual-browser-agent-bridge`.
-- O cockpit acessível via depurador na porta `9334` informou bridge ativa na porta `43325`; isso não prova a associação da porta `44993`.
+- Porta `44993` pertence ao processo Electron da instância `principal` (PID 518286).
+- Porta `43325` pertence à instância `notebook` (PID 518285), com depuração remota na porta `9334`.
+- Porta `47831` pertence à instância `notebook-team2` (PID 518287).
+- A instância `principal` não expõe atualmente uma porta de depuração remota. O atalho para abrir DevTools não criou janela de depuração; o token deve ser obtido pelo fluxo oficial da instância sem reiniciar sessões autenticadas.
 - A navegação para Instagram ainda não foi confirmada.
