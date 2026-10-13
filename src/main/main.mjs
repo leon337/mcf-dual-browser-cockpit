@@ -11,6 +11,7 @@ import { isGenerationStopControl, isTargetGenerationActive } from './generation-
 import { buildAgentSessionDeliveryProbe, isAgentSessionDeliveryConfirmed } from './agent-session-verification.mjs';
 import { buildRestoreSafeStartupPlan } from './startup-policy.mjs';
 import { instanceConfig, atomicJson } from './instance.mjs';
+import { DEFAULT_CONTROL_SETTINGS, CONTROL_SETTINGS_SCHEMA, normalizeControlSettings, validateControlSettings } from './control-settings.mjs';
 
 const instance = instanceConfig(process.argv, app.getPath('userData'));
 const agentBindings = agentBindingsForProfile(instance.agentProfile);
@@ -49,6 +50,8 @@ const agentSessionRuntime = new Map();
 // instance profile; credentials are never exported to a plaintext session vault.
 const persistentBrowserSessions = new Map();
 let splitRatio = 0.5;
+let currentDisplayMode = 'cockpit';
+let controlSettings = { ...DEFAULT_CONTROL_SETTINGS };
 let bridge = null;
 let paneAgentRuntime = null;
 let restoredRuntimeState = null;
@@ -1840,6 +1843,11 @@ async function openAgentSession({ agent, mission = null, objective = null }) {
 function updateViewBounds() {
   if (!mainWindow || mainWindow.isDestroyed() || !chatView || !workspaceView) return;
   const [width, height] = mainWindow.getContentSize();
+  if (currentDisplayMode !== 'cockpit') {
+    chatView.setBounds({ x: 0, y: HEADER_HEIGHT, width: 0, height: 0 });
+    workspaceView.setBounds({ x: 0, y: HEADER_HEIGHT, width: 0, height: 0 });
+    return;
+  }
   const availableHeight = Math.max(120, height - HEADER_HEIGHT - STATUS_HEIGHT);
   const usableWidth = Math.max(MIN_PANE * 2 + VIEW_GAP, width - VIEW_GAP);
   const minRatio = Math.min(0.48, MIN_PANE / usableWidth);
@@ -1981,7 +1989,10 @@ function createWindow() {
     onEvent: emitBridgeEvent,
   });
 
-  bridge.start()
+  const bridgeStartup = controlSettings.startBridgeOnLaunch
+    ? bridge.start(controlSettings.preferredBridgePort)
+    : Promise.resolve(bridge.getState());
+  bridgeStartup
     .then(async (state) => {
       persistBridgeState(state);
       await sleep(1200);
@@ -2104,6 +2115,31 @@ async function captureWorkspace() {
   return { ok: true, path: output };
 }
 
+function controlSettingsFile() {
+  return path.join(app.getPath('userData'), 'control-settings.json');
+}
+
+function loadControlSettings() {
+  try {
+    const parsed = JSON.parse(readFileSync(controlSettingsFile(), 'utf8'));
+    if (parsed?.schema === CONTROL_SETTINGS_SCHEMA) return normalizeControlSettings(parsed.settings);
+    return normalizeControlSettings(parsed);
+  } catch {
+    return { ...DEFAULT_CONTROL_SETTINGS };
+  }
+}
+
+function saveControlSettings(input) {
+  const validated = validateControlSettings(input);
+  if (!validated.ok) return validated;
+  controlSettings = validated.settings;
+  atomicJson(controlSettingsFile(), { schema: CONTROL_SETTINGS_SCHEMA, updatedAt: new Date().toISOString(), settings: controlSettings });
+  const ratios = { balanced: 0.5, leandro: 0.65, mestre: 0.35 };
+  splitRatio = ratios[controlSettings.defaultLayout] ?? splitRatio;
+  updateViewBounds();
+  return { ok: true, settings: controlSettings };
+}
+
 function handleTrusted(channel, handler) {
   ipcMain.handle(channel, (event, ...args) => {
     if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
@@ -2192,9 +2228,26 @@ handleTrusted('bridge:copy-token', () => {
   return { ok: true };
 });
 
+handleTrusted('settings:get', () => ({
+  ok: true, settings: controlSettings, instanceId: instance.id,
+  agentProfile: instance.agentProfile, version: app.getVersion(),
+}));
+handleTrusted('settings:save', (_event, input) => saveControlSettings(input));
+handleTrusted('layout:set-mode', (_event, mode) => {
+  if (!['cockpit', 'control-center'].includes(mode)) return { ok: false, error: 'invalid_mode' };
+  currentDisplayMode = mode;
+  updateViewBounds();
+  return { ok: true, mode: currentDisplayMode };
+});
+handleTrusted('bridge:get-observability', async () => {
+  if (!bridge) return { schema: 'mcf-cockpit-observability/v1', capturedAt: new Date().toISOString(), bridge: { enabled: false }, panes: [], agents: [], missions: [], receipts: [], events: [] };
+  return bridge.getObservabilitySnapshot({ eventLimit: controlSettings.eventLimit });
+});
+
 app.whenReady().then(() => {
   if (!ownsInstance) return;
   app.setAccessibilitySupportEnabled(true);
+  controlSettings = loadControlSettings();
   restoredRuntimeState = loadRuntimeState();
   const savedSplit = Number(restoredRuntimeState?.splitRatio);
   if (Number.isFinite(savedSplit)) splitRatio = Math.min(0.72, Math.max(0.28, savedSplit));

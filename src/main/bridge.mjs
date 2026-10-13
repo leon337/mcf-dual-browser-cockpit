@@ -310,6 +310,71 @@ export class LocalAgentBridge {
     return this.liveEvents.snapshot(after);
   }
 
+  async getObservabilitySnapshot({ eventLimit = 50 } = {}) {
+    const limit = [25, 50, 100].includes(Number(eventLimit)) ? Number(eventLimit) : 50;
+    const read = async (fn) => {
+      if (typeof fn !== 'function') return [];
+      try { const value = await fn(); return Array.isArray(value) ? value : []; } catch { return []; }
+    };
+    const [rawAgents, rawMissions, rawReceipts] = await Promise.all([
+      read(this.getAgentIdentities), read(this.listAgentMissions), read(this.listAgentReceipts),
+    ]);
+    const panes = ['chat', 'workspace'].map((pane) => {
+      const wc = this.getPaneWebContents?.(pane);
+      if (!wc || wc.isDestroyed?.()) return { pane, available: false, url: null, title: null, loading: false };
+      let url = null;
+      try {
+        const parsed = new URL(wc.getURL());
+        if (['http:', 'https:'].includes(parsed.protocol)) {
+          parsed.username = ''; parsed.password = ''; parsed.search = ''; parsed.hash = '';
+          url = parsed.href.slice(0, 500);
+        }
+      } catch {}
+      return { pane, available: true, url, title: String(wc.getTitle?.() || '').slice(0, 240), loading: Boolean(wc.isLoading?.()) };
+    });
+    const agents = rawAgents.map((a) => ({
+      agentId: String(a?.agentId || a?.canonicalName || 'unknown').slice(0, 100),
+      role: String(a?.role || '').slice(0, 160), pane: String(a?.pane || ''),
+      state: String(a?.state || 'UNKNOWN').slice(0, 60),
+      handshakeVerified: Boolean(a?.handshakeVerified),
+      reconciliationRequired: Boolean(a?.reconciliationRequired),
+      sessionId: a?.sessionId ? String(a.sessionId).slice(0, 8) : null,
+      lastError: a?.lastError ? String(a.lastError).slice(0, 240) : null,
+      updatedAt: a?.updatedAt ?? null,
+    }));
+    const missions = rawMissions.slice(-limit).map((m) => ({
+      missionId: String(m?.missionId || '').slice(0, 160),
+      agentId: String(m?.agentId || '').slice(0, 100), pane: String(m?.pane || ''),
+      state: String(m?.state || 'UNKNOWN').slice(0, 60), createdAt: m?.createdAt ?? null,
+      updatedAt: m?.updatedAt ?? null, attemptNumber: Number(m?.attemptNumber || 1),
+      reconciliationRequired: Boolean(m?.reconciliationRequired),
+      lastError: m?.lastError ? String(m.lastError).slice(0, 240) : null,
+    }));
+    const receipts = rawReceipts.slice(-limit).reverse().map((r) => ({
+      receiptId: String(r?.receiptId || '').slice(0, 80), kind: String(r?.kind || 'RECEIPT').slice(0, 100),
+      status: String(r?.status || 'UNKNOWN').slice(0, 60), createdAt: r?.createdAt ?? null,
+      agentId: String(r?.agent?.agentId || '').slice(0, 100),
+      envelopeId: String(r?.envelope?.envelopeId || '').slice(0, 80),
+    }));
+    const events = (this.liveEvents?.snapshot(null)?.events || []).slice(-limit).reverse().map((e) => ({
+      eventId: String(e?.eventId || '').slice(0, 120), timestamp: e?.timestamp ?? null,
+      type: String(e?.type || 'EVENT').slice(0, 100), source: String(e?.source || '').slice(0, 100),
+      authority: String(e?.authority || '').slice(0, 60), pane: String(e?.pane || '').slice(0, 40),
+      missionId: e?.missionId ? String(e.missionId).slice(0, 160) : null,
+      envelopeId: e?.envelopeId ? String(e.envelopeId).slice(0, 80) : null,
+      agentId: e?.agentId ? String(e.agentId).slice(0, 100) : null,
+      state: e?.state ? String(e.state).slice(0, 60) : null,
+      status: e?.status ? String(e.status).slice(0, 60) : null,
+    }));
+    return {
+      schema: 'mcf-cockpit-observability/v1', capturedAt: new Date().toISOString(),
+      bridge: { enabled: Boolean(this.server), host: '127.0.0.1', port: this.port,
+        instanceId: this.instanceId, agentProfile: this.agentProfile, paused: Boolean(this.paused),
+        busy: Boolean(this.busy), queueDepth: this.mutationQueue.length },
+      panes, agents, missions, receipts, events, eventLimit: limit,
+    };
+  }
+
   setPaused(paused) {
     this.paused = Boolean(paused);
     this.onEvent({ level: 'info', message: this.paused ? 'Novas ações pausadas; ação em curso pode terminar.' : 'Automação retomada.' });
