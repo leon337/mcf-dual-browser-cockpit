@@ -466,3 +466,66 @@ body.control-mode .statusbar .dot { box-shadow: none; }
   .pane-name { font-size: 10px; }
   .statusbar { font-size: 9px; }
 }
+
+/* 0.7.3 accessibility: larger, higher-contrast text in settings and control center. */
+.control-entry { min-height: 36px; height: auto; padding: 7px 13px; font-size: 13px; }
+.control-side-brand strong { font-size: 14px; }
+.control-side-brand span { font-size: 13px; }
+.sidebar-section-label { font-size: 12px; }
+.control-tab { min-height: 60px; gap: 12px; padding: 10px 12px; }
+.control-tab > span:first-child { font-size: 20px; }
+.control-tab strong { font-size: 15px; }
+.control-tab small { font-size: 12px; line-height: 1.5; }
+.local-indicator { font-size: 13px; }
+.version-pill { font-size: 11px; }
+.control-sidebar-footer small { font-size: 12px; line-height: 1.6; }
+.eyebrow { font-size: 12px; }
+.control-header h1 { font-size: 29px; line-height: 1.25; }
+.control-header p { font-size: 15px; line-height: 1.65; }
+.last-refresh { font-size: 13px; }
+.primary-button, .secondary-button { min-height: 42px; padding: 0 17px; font-size: 14px; }
+.control-scroll { padding: 26px 32px 34px; }
+.metric-label { font-size: 12px; line-height: 1.5; }
+.metric-value { font-size: 31px; }
+.metric-note { font-size: 13px; line-height: 1.6; }
+.panel-heading h2 { font-size: 17px; }
+.panel-heading p { font-size: 14px; line-height: 1.6; }
+.text-button { font-size: 14px; }
+.status-label, .status-value { font-size: 14px; line-height: 1.65; }
+.state-pill, .count-pill { font-size: 12px; }
+.event-time, .event-tag { font-size: 12px; }
+.event-name { font-size: 14px; line-height: 1.6; }
+.event-meta { font-size: 12px; line-height: 1.65; }
+.pane-item-name, .record-title { font-size: 14px; line-height: 1.6; }
+.pane-item-url, .record-subtitle, .record-warning { font-size: 12px; line-height: 1.7; }
+.empty-state, .privacy-note { font-size: 13px; line-height: 1.75; }
+.settings-intro h2 { font-size: 22px; }
+.settings-intro p { font-size: 15px; line-height: 1.7; }
+.settings-section { padding: 6px 22px 18px; margin-bottom: 18px; }
+.settings-section-title { gap: 13px; padding: 17px 0 13px; }
+.settings-section-icon { width: 30px; height: 30px; font-size: 16px; }
+.settings-section-title h3 { font-size: 16px; line-height: 1.5; }
+.settings-section-title p { font-size: 14px; line-height: 1.65; }
+.setting-toggle { gap: 18px; padding: 17px 0; }
+.setting-toggle strong, .form-row strong { font-size: 15px; line-height: 1.55; }
+.setting-toggle small, .form-row small { font-size: 13px; line-height: 1.75; max-width: 680px; }
+.setting-toggle input { width: 42px; min-width: 42px; height: 23px; }
+.form-row { gap: 12px; padding: 16px 0; }
+.form-row input, .form-row select { min-height: 46px; height: 46px; padding: 0 12px; font-size: 15px; }
+.identity-grid small { font-size: 13px; line-height: 1.6; }
+.identity-grid strong { font-size: 15px; line-height: 1.65; }
+.settings-hint, .settings-hint code { font-size: 13px; line-height: 1.75; }
+.settings-actions [role="status"] { font-size: 14px; line-height: 1.6; }
+.statusbar { font-size: 11px; }
+.toast { font-size: 14px; line-height: 1.6; }
+@media (max-width: 720px) {
+  .control-header h1 { font-size: 24px; }
+  .control-header p { font-size: 14px; }
+  .control-scroll { padding: 16px; }
+  .metric-label { font-size: 11px; }
+  .metric-value { font-size: 24px; }
+  .metric-note { font-size: 12px; }
+  .settings-section { padding-left: 14px; padding-right: 14px; }
+  .setting-toggle strong, .form-row strong { font-size: 14px; }
+  .setting-toggle small, .form-row small { font-size: 12px; }
+}
