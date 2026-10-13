@@ -1,0 +1,54 @@
+--- a/src/renderer/index.html
++++ b/src/renderer/index.html
+@@ -176,6 +176,19 @@
+               </div>
+             </section>
+             <section class="settings-section">
++              <div class="settings-section-title"><span class="settings-section-icon">⏯</span><div><h3>Controle operacional</h3><p>Estado da automação e da API local. Estes botões usam os mesmos comandos confiáveis da barra principal.</p></div></div>
++              <div class="identity-grid">
++                <div><small>Agent Bridge agora</small><strong id="settingsBridgeState">Verificando…</strong></div>
++                <div><small>Automação agora</small><strong id="settingsAutomationState">Verificando…</strong></div>
++                <div><small>Fila de ações</small><strong id="settingsQueueState">—</strong></div>
++              </div>
++              <div class="settings-actions operational-settings-actions">
++                <button type="button" id="settingsBridgeToggle" class="secondary-button">Ativar Agent Bridge</button>
++                <button type="button" id="settingsPauseToggle" class="secondary-button">Retomar automação</button>
++              </div>
++              <p class="settings-hint">Pausar bloqueia novas ações e pode causar HTTP 423 automation_paused. A porta ativa pode ser diferente da preferencial. A pausa não é persistida como preferência; estes controles atuam no estado atual.</p>
++            </section>
++            <section class="settings-section">
+               <div class="settings-section-title"><span class="settings-section-icon">▥</span><div><h3>Experiência do cockpit</h3><p>Define o layout ao abrir e como o painel se atualiza.</p></div></div>
+               <div class="form-row">
+                 <label for="settingsLayout"><strong>Layout padrão</strong><small>Aplicado ao iniciar e ao salvar as preferências.</small></label>
+@@ -148,6 +148,16 @@
+   copyTokenButton.classList.toggle('hidden', !state.enabled);
+   if (state.enabled) activity.textContent = `Bridge local: 127.0.0.1:${state.port} · token efêmero`;
+   else activity.textContent = 'Cockpit local · Bridge desligada';
++  const settingsBridgeState = document.getElementById('settingsBridgeState');
++  const settingsAutomationState = document.getElementById('settingsAutomationState');
++  const settingsQueueState = document.getElementById('settingsQueueState');
++  const settingsBridgeToggle = document.getElementById('settingsBridgeToggle');
++  const settingsPauseToggle = document.getElementById('settingsPauseToggle');
++  if (settingsBridgeState) settingsBridgeState.textContent = state.enabled ? `ATIVA · 127.0.0.1:${state.port}` : 'DESATIVADA';
++  if (settingsAutomationState) settingsAutomationState.textContent = state.paused ? 'PAUSADA' : state.busy ? 'EM EXECUÇÃO' : 'PRONTA';
++  if (settingsQueueState) settingsQueueState.textContent = String(state.queueDepth ?? 0);
++  if (settingsBridgeToggle) { settingsBridgeToggle.textContent = state.enabled ? 'Desativar Agent Bridge' : 'Ativar Agent Bridge'; settingsBridgeToggle.disabled = Boolean(state.busy); }
++  if (settingsPauseToggle) { settingsPauseToggle.textContent = state.paused ? 'Retomar automação' : 'Pausar automação'; settingsPauseToggle.disabled = !state.enabled; }
+ }
+ 
+ function renderEventRows(target, events, compact = false) {
+@@ -541,6 +551,14 @@
+   button.addEventListener('click', () => switchControlPage(button.dataset.openTab));
+ });
+ document.getElementById('settingsForm').addEventListener('submit', saveSettingsForm);
++document.getElementById('settingsBridgeToggle').addEventListener('click', async () => {
++  try { const state = await api.bridge.toggle(); await refreshBridge(); setToast(state.enabled ? 'Agent Bridge ativada em 127.0.0.1.' : 'Agent Bridge desativada.'); scheduleSnapshotRefresh(); }
++  catch (error) { setToast(`Falha ao alternar bridge: ${error.message}`, 'error'); }
++});
++document.getElementById('settingsPauseToggle').addEventListener('click', async () => {
++  try { const state = await api.bridge.pause(); await refreshBridge(); setToast(state.paused ? 'Novas ações pausadas.' : 'Automação retomada.'); scheduleSnapshotRefresh(); }
++  catch { setToast('Não foi possível alterar a pausa da automação.', 'error'); }
++});
+ document.getElementById('pauseBridgeButton').addEventListener('click', async () => {
+   try {
+     const state = await api.bridge.pause();
