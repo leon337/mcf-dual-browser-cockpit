@@ -1,28 +1,35 @@
-# Checklist operacional — Agent Bridge e Instagram
+# Checklist operacional — Agent Bridge, observabilidade e Meta Business
 
 ## Objetivo
-Identificar a instância do MCF Dual Browser Cockpit que controla a Agent Bridge na porta `44993`, autenticar pelo mecanismo oficial, navegar para `https://www.instagram.com/` e confirmar a URL final.
+Validar a observabilidade da Agent Bridge `44993`, testar navegação para uma URL pública neutra e abrir o Meta Business na instância `principal` para diagnosticar dificuldades de navegação.
 
-## Checklist de execução
-- [x] Confirmar que a bridge na porta `44993` responde em `/health`.
-- [x] Confirmar as bridges nas portas `47831` e `43325`.
-- [x] Identificar o mecanismo oficial de token via botão de cópia do cockpit (`cockpit.bridge.copyToken()`); o token não foi exibido nem registrado.
-- [x] Mapear a porta `44993` à instância Electron `principal` (PID 518286), usando `sudo ss -ltnp` e `/proc/<pid>/cmdline`.
-- [x] Obter o token da instância correta pela interface oficial, sem reiniciar a sessão.
-- [x] Enviar `POST /v1/navigate` para `https://www.instagram.com/`.
-- [x] Consultar `GET /v1/state` e validar URL, título e carregamento.
-- [x] Registrar as evidências e atualizar este checklist.
+## Checklist
+- [x] Confirmar saúde da bridge em `/health`.
+- [x] Confirmar que as bridges `44993`, `47831` e `43325` estão ativas.
+- [x] Mapear `44993` para a instância Electron `principal` (PID 518286).
+- [x] Obter o token somente pela interface oficial; token nunca impresso ou registrado.
+- [x] Validar `GET /v1/state`.
+- [x] Validar `GET /v1/text` sem persistir o conteúdo integral da página.
+- [x] Validar `GET /v1/interactive`.
+- [x] Validar `GET /v1/accessibility`.
+- [x] Testar `POST /v1/navigate` para `https://example.com/` e registrar o bloqueio retornado.
+- [ ] Abrir `https://business.facebook.com/` pela bridge.
+- [ ] Inspecionar a página Meta Business e documentar obstáculos de navegação/autenticação.
+- [ ] Corrigir no código os obstáculos confirmados, criar testes de regressão e repetir a validação.
 
-## Evidências verificadas
-- `GET http://127.0.0.1:44993/health`: HTTP 200, serviço `mcf-dual-browser-agent-bridge`, versão 1.
-- `GET /v1/state` antes da navegação: instância `principal`, painel `workspace`, URL inicial ChatGPT, `paused=false`, `busy=false`, `queueDepth=0`.
-- `POST /v1/navigate` com `https://www.instagram.com/`: HTTP 200, `ok=true`.
-- `GET /v1/state` após a navegação: HTTP 200; URL final `https://www.instagram.com/`; título `Instagram`; `loading=false`; instância `principal`.
-- As sessões autenticadas foram preservadas; não foi necessário reiniciar o cockpit.
-- O token não foi impresso, incluído no checklist ou publicado.
+## Evidências de observabilidade
+- `GET /health`: HTTP 200; serviço `mcf-dual-browser-agent-bridge`, versão 1.
+- `GET /v1/state`: HTTP 200; retorna URL, título, loading, histórico e estado de automação.
+- `GET /v1/text`: HTTP 200; retornou URL/título e texto da página; somente tamanho e presença de prompts genéricos foram avaliados, sem armazenar o texto.
+- `GET /v1/interactive`: HTTP 200; página Instagram apresentou 94 nós interativos.
+- `GET /v1/accessibility`: HTTP 200; árvore de acessibilidade retornou 909 nós, 572 não ignorados.
+- `POST /v1/navigate` para `https://example.com/`: HTTP 423 com `automation_paused`; a URL e o título permaneceram no Instagram. Repetição confirmou o bloqueio.
+- A bridge está saudável, mas a ação de navegação fica bloqueada enquanto a automação está pausada. Esse é o obstáculo primário observado; não foi alterado automaticamente o estado de pausa.
+- A tentativa de navegação para Meta Business ainda não foi concluída. Não afirmar que o site foi aberto.
+- Nenhum token ou dado privado de conta foi incluído neste documento.
 
-## Resultado
-**CONCLUÍDO** — a Agent Bridge da instância `principal` navegou para Instagram e o estado retornado confirmou a URL e o título esperados.
+## Diagnóstico preliminar
+A observabilidade de leitura funciona. A navegação falha por bloqueio explícito `automation_paused` (HTTP 423), não por indisponibilidade da bridge. Antes de modificar o código, deve-se localizar a origem do estado de pausa e a ação de interface documentada para retomá-la; manter a pausa como controle de segurança até ser claro que a instância pode prosseguir.
 
-## Próxima etapa
-A navegação de teste está concluída. Para avançar a missão de forma segura, o próximo passo é verificar o fluxo de navegação e observabilidade do cockpit com uma segunda URL de teste não autenticada e documentar o comportamento de retorno/erro, sem interagir com contas nem alterar sessões existentes.
+## Resultado atual
+**PARCIAL** — endpoints de observabilidade verificados; navegação e inspeção do Meta Business pendentes por automação pausada.
