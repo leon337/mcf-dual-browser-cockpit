@@ -213,3 +213,24 @@ A Agent Bridge oferece um canal Server-Sent Events (SSE) autenticado e mantido a
 - Eventos de navegação: `NAVIGATION_STARTED`, `NAVIGATION_FINISHED`, `NAVIGATED`, `IN_PAGE_NAVIGATION`, `PAGE_TITLE_UPDATED`, `NAVIGATION_FAILED` e `RENDERER_CRASHED`, além dos eventos de estado e do runtime de agentes.
 - A URL publicada nos novos eventos remove query strings e fragmentos para reduzir exposição acidental de parâmetros sensíveis.
 - O canal é limitado a loopback e requer token efêmero; não exponha a porta à rede pública.
+
+## Estado operacional observado — reconciliação 0.7.4 (12/10/2026)
+
+A interface observada na instalação do usuário inclui o painel **CONTROLE**, com **Visão geral**, **Observabilidade** e **Configurações**. Os controles de navegação e o painel de controle evoluíram além do MVP descrito em partes deste README; leia também o [Guia de operação e configurações 0.7.4](docs/CONFIGURACOES-E-OPERACAO-0.7.4.md).
+
+Preferências persistidas confirmadas no snapshot de código inspecionado:
+- iniciar a Agent Bridge ao abrir;
+- porta preferencial;
+- layout padrão (`balanced`, `leandro`, `mestre`);
+- intervalo de atualização da observabilidade (2, 3, 5 ou 10 segundos);
+- limite de histórico visível (25, 50 ou 100 registros).
+
+Controles operacionais que não são preferências persistidas:
+- ativar/desativar a bridge;
+- pausar/retomar automação;
+- navegação e captura do Workspace;
+- visualização de estado, eventos, agentes, missões e receipts.
+
+**Nota de integridade da release:** o usuário identifica o binário em execução como 0.7.4, mas o snapshot local extraído em `active-app-inspection/package.json` indica 0.7.1 e a pasta de instalação não possui metadados Git. A correspondência exata entre binário, tag, fonte e build precisa ser demonstrada antes de declarar a documentação ou a release totalmente reconciliadas. Não trate este README como prova de que os testes/build da 0.7.4 foram executados.
+
+A tarefa de reconciliação está em [Issue #23](https://github.com/leon337/mcf-dual-browser-cockpit/issues/23); o registro MCF está em [Issue #439](https://github.com/leon337/multiagent-collaboration-framework/issues/439).
