@@ -20,6 +20,8 @@
                <div class="settings-section-title"><span class="settings-section-icon">▥</span><div><h3>Experiência do cockpit</h3><p>Define o layout ao abrir e como o painel se atualiza.</p></div></div>
                <div class="form-row">
                  <label for="settingsLayout"><strong>Layout padrão</strong><small>Aplicado ao iniciar e ao salvar as preferências.</small></label>
+--- a/src/renderer/renderer.js
++++ b/src/renderer/renderer.js
 @@ -148,6 +148,16 @@
    copyTokenButton.classList.toggle('hidden', !state.enabled);
    if (state.enabled) activity.textContent = `Bridge local: 127.0.0.1:${state.port} · token efêmero`;
