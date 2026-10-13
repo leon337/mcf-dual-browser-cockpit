@@ -45,3 +45,12 @@ Reconciliar a documentação e o painel de configurações com o código realmen
 
 ## Resultado
 **PARCIAL — fase de diagnóstico/documentação iniciada.** Issues criadas e guia publicado; implementação e validação de release permanecem pendentes, pois a fonte de código correspondente ao binário 0.7.4 ainda precisa ser identificada.
+
+
+## Atualização documental e testes adicionais — 12/10/2026
+- [x] Publicar o guia operacional inicial: [CONFIGURACOES-E-OPERACAO-0.7.4.md](../CONFIGURACOES-E-OPERACAO-0.7.4.md).
+- [x] Reconciliar o README com os controles observados e registrar a ressalva de versão. Commit: `c215429dd8db17f88b4bebb43049e5914c4f800d`.
+- [x] Executar `npm run check` e `npm test` no snapshot `active-app-inspection`: **14 testes passaram, 0 falharam**.
+- [ ] Não considerar o resultado dos testes como validação do binário 0.7.4: o package do snapshot declara 0.7.1.
+- [ ] Implementar alterações no código-fonte canônico, obter build reproduzível e verificar a interface da versão final.
+- [ ] Publicar/mesclar o registro MCF via PR [#440](https://github.com/leon337/multiagent-collaboration-framework/pull/440); a branch do MCF preserva a governança de main.
