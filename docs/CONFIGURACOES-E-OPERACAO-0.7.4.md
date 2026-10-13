@@ -92,3 +92,8 @@ Verificar a indicação de quando a preferência se aplica. Inicialização/port
 - Tarefa do produto: https://github.com/leon337/mcf-dual-browser-cockpit/issues/23
 - Tarefa de integração/governança MCF: https://github.com/leon337/multiagent-collaboration-framework/issues/439
 - Migração futura para Agent Workspace: https://github.com/leon337/multiagent-collaboration-framework/issues/381
+
+
+## Atualização 0.7.5 — controle explícito da automação
+
+Na versão seguinte, abra **CONTROLE → Configurações → Controle da automação**. A tela mostra o estado em tempo real e oferece o botão de pausar/retomar. A pausa bloqueia novas ações da bridge; não interrompe uma ação já em curso. Se a bridge estiver desligada, o controle permanece indisponível.

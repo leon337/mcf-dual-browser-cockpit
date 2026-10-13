@@ -167,6 +167,14 @@
         <section class="control-page hidden" data-control-page="settings">
           <div class="settings-intro"><div class="settings-mark">⚙</div><div><h2>Configurações do cockpit</h2><p>Preferências locais para inicialização, layout e observabilidade.</p></div></div>
           <form id="settingsForm" class="settings-form">
+            <section class="settings-section automation-settings">
+              <div class="settings-section-title"><span class="settings-section-icon">⏯</span><div><h3>Controle da automação</h3><p>Estado em tempo real da Agent Bridge e comando explícito para liberar ou bloquear novas ações.</p></div></div>
+              <div class="automation-control-row">
+                <div class="automation-state-copy"><strong id="settingsAutomationState">Consultando estado…</strong><small id="settingsAutomationNote">A pausa bloqueia novas ações enviadas pela bridge; não encerra a ação já em curso.</small></div>
+                <button type="button" id="settingsAutomationToggle" class="secondary-button" disabled>Carregando…</button>
+              </div>
+              <p class="settings-hint">Este é um controle operacional imediato, separado das preferências salvas abaixo. Se a bridge estiver desligada, o comando ficará indisponível.</p>
+            </section>
             <section class="settings-section">
               <div class="settings-section-title"><span class="settings-section-icon">◉</span><div><h3>Agent Bridge</h3><p>Controle da API local usada por clientes autorizados.</p></div></div>
               <label class="setting-toggle"><span><strong>Iniciar a bridge ao abrir o aplicativo</strong><small>Desativar mantém a UI e o runtime local disponíveis, sem abrir a API HTTP. A alteração vale na próxima inicialização.</small></span><input id="settingsStartBridge" type="checkbox" /></label>

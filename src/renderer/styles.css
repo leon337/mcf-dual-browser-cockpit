@@ -299,6 +299,12 @@ button { color: inherit; }
 .settings-intro p { margin: 5px 0 0; color: #7d8da3; font-size: 10px; }
 .settings-form { max-width: 920px; }
 .settings-section { margin-bottom: 14px; padding: 4px 18px 14px; border: 1px solid #2a3a4e; border-radius: 10px; background: #121c29; }
+.automation-control-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 15px 0 7px; }
+.automation-state-copy strong { display: block; color: #d8e5f6; font-size: 11px; }
+.automation-state-copy small { display: block; margin-top: 5px; max-width: 620px; color: #8798af; font-size: 9px; line-height: 1.55; }
+.automation-settings .settings-hint { margin: 7px 0 0; }
+#settingsAutomationToggle:disabled { opacity: .55; cursor: not-allowed; }
+@media (max-width: 720px) { .automation-control-row { align-items: flex-start; flex-direction: column; } }
 .settings-section-title { display: flex; align-items: flex-start; gap: 11px; padding: 14px 0 10px; border-bottom: 1px solid #263448; }
 .settings-section-icon { width: 25px; height: 25px; display: grid; place-items: center; border: 1px solid #314763; border-radius: 7px; background: #19283b; color: #8db7ec; font-size: 13px; }
 .settings-section-title h3 { margin: 0; color: #dce7f7; font-size: 11px; }

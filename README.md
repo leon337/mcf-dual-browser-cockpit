@@ -234,3 +234,8 @@ Controles operacionais que não são preferências persistidas:
 **Nota de integridade da release:** o usuário identifica o binário em execução como 0.7.4, mas o snapshot local extraído em `active-app-inspection/package.json` indica 0.7.1 e a pasta de instalação não possui metadados Git. A correspondência exata entre binário, tag, fonte e build precisa ser demonstrada antes de declarar a documentação ou a release totalmente reconciliadas. Não trate este README como prova de que os testes/build da 0.7.4 foram executados.
 
 A tarefa de reconciliação está em [Issue #23](https://github.com/leon337/mcf-dual-browser-cockpit/issues/23); o registro MCF está em [Issue #439](https://github.com/leon337/multiagent-collaboration-framework/issues/439).
+
+
+## Controle da automação nas Configurações (0.7.5)
+
+Abra **CONTROLE → Configurações → Controle da automação** para ver o estado atual da Agent Bridge e usar **Pausar automação** ou **Retomar automação**. Os estados distinguem bridge desligada, automação pausada, ação em curso e automação liberada. A pausa bloqueia novas ações recebidas pela bridge, mas não cancela a ação que já está em curso. O botão usa o IPC confiável já existente e fica desativado quando a bridge está desligada.

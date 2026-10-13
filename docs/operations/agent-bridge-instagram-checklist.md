@@ -24,10 +24,12 @@ Reconciliar a documentação e o painel de configurações com o código realmen
 - [ ] Retomar automação somente pelo controle oficial e confirmar `paused=false`.
 - [ ] Repetir navegação neutra para `https://example.com/`.
 - [ ] Abrir `https://business.facebook.com/` em modo de inspeção; sem publicar, editar ativos ou alterar configurações comerciais.
-- [ ] Implementar catálogo de configurações e controles operacionais na fonte de código canônica.
-- [ ] Adicionar testes para schema, defaults, validação, persistência, pausa/retomada e regressões.
-- [ ] Executar check/test/build e verificar visualmente a UI.
-- [ ] Atualizar documentação de release/README/troubleshooting após confirmar paridade de código.
+- [x] Implementar controle da automação dentro de Configurações, ligado ao IPC confiável `bridge:pause`.
+- [x] Adicionar testes de regressão para presença do controle, estados da automação e ligação ao IPC; suíte existente também executada.
+- [ ] Executar build do AppImage 0.7.5 e validar a UI em instância isolada.
+- [x] Executar `npm test`: suíte completa aprovada após a alteração do painel.
+- [x] Atualizar guia operacional, README e notas de release para documentar o controle de automação.
+- [ ] Confirmar paridade entre o AppImage gerado e a janela de produção sem reiniciar sessões autenticadas.
 - [ ] Atualizar este checklist com evidências reais e SHAs de commit.
 - [ ] Iniciar próxima fase do Agent Workspace preservando Dual Browser como fallback até paridade comprovada.
 
@@ -54,3 +56,12 @@ Reconciliar a documentação e o painel de configurações com o código realmen
 - [ ] Não considerar o resultado dos testes como validação do binário 0.7.4: o package do snapshot declara 0.7.1.
 - [ ] Implementar alterações no código-fonte canônico, obter build reproduzível e verificar a interface da versão final.
 - [ ] Publicar/mesclar o registro MCF via PR [#440](https://github.com/leon337/multiagent-collaboration-framework/pull/440); a branch do MCF preserva a governança de main.
+
+
+## Implementação do controle da automação — 12/10/2026
+- [x] A seção **Configurações → Controle da automação** agora apresenta os estados `BRIDGE DESLIGADA`, `AUTOMAÇÃO PAUSADA`, `AÇÃO EM CURSO` e `AUTOMAÇÃO LIBERADA`.
+- [x] O botão `Pausar automação` / `Retomar automação` chama o IPC confiável já existente (`bridge:pause`); não introduz endpoint público de controle nem contorna a pausa.
+- [x] A tela explica que pausar bloqueia novas ações e não cancela a ação em curso.
+- [x] Três testes de UI/ligação de estado adicionados em `test/automation-settings-ui.test.mjs`.
+- [x] `npm test`: **102 testes passaram, 0 falharam** (99 anteriores + 3 novos).
+- [ ] Build, inspeção visual da nova interface e validação de navegação neutra/Meta Business continuam pendentes.

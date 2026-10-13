@@ -148,6 +148,23 @@ async function refreshBridge() {
   copyTokenButton.classList.toggle('hidden', !state.enabled);
   if (state.enabled) activity.textContent = `Bridge local: 127.0.0.1:${state.port} · token efêmero`;
   else activity.textContent = 'Cockpit local · Bridge desligada';
+
+  const settingsState = document.getElementById('settingsAutomationState');
+  const settingsNote = document.getElementById('settingsAutomationNote');
+  const settingsToggle = document.getElementById('settingsAutomationToggle');
+  if (settingsState && settingsNote && settingsToggle) {
+    settingsState.textContent = !state.enabled ? 'BRIDGE DESLIGADA' : state.paused ? 'AUTOMAÇÃO PAUSADA' : state.busy ? 'AÇÃO EM CURSO' : 'AUTOMAÇÃO LIBERADA';
+    settingsNote.textContent = !state.enabled
+      ? 'Ative a Agent Bridge na barra principal para habilitar o controle de pausa.'
+      : state.paused
+        ? 'Novas ações estão bloqueadas. Retomar libera novas ações; uma ação já iniciada não é cancelada.'
+        : state.busy
+          ? 'A bridge está executando uma ação. Pausar bloqueia novas ações, sem interromper a atual.'
+          : 'A bridge está aceitando novas ações autorizadas.';
+    settingsToggle.textContent = state.paused ? 'Retomar automação' : 'Pausar automação';
+    settingsToggle.disabled = !state.enabled;
+    settingsToggle.setAttribute('aria-pressed', String(state.paused));
+  }
 }
 
 function renderEventRows(target, events, compact = false) {
@@ -393,6 +410,7 @@ async function closeControlCenter() {
 }
 
 async function fillSettingsForm() {
+  await refreshBridge();
   const metadata = await api.settings.get();
   if (!metadata?.ok) return;
   controlMetadata = { ...controlMetadata, ...metadata };
@@ -541,6 +559,19 @@ document.querySelectorAll('[data-open-tab]').forEach(button => {
   button.addEventListener('click', () => switchControlPage(button.dataset.openTab));
 });
 document.getElementById('settingsForm').addEventListener('submit', saveSettingsForm);
+document.getElementById('settingsAutomationToggle').addEventListener('click', async () => {
+  const button = document.getElementById('settingsAutomationToggle');
+  button.disabled = true;
+  try {
+    const state = await api.bridge.pause();
+    await refreshBridge();
+    setToast(state.paused ? 'Novas ações pausadas.' : 'Automação retomada.', 'ok');
+    await refreshControlSnapshot();
+  } catch {
+    setToast('Não foi possível alterar o estado da automação.', 'error');
+    button.disabled = false;
+  }
+});
 document.getElementById('pauseBridgeButton').addEventListener('click', async () => {
   try {
     const state = await api.bridge.pause();
