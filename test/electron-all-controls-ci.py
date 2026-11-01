@@ -48,7 +48,7 @@ class CDP:
         data = await self.cmd("Runtime.evaluate", {
             "expression": expression, "returnByValue": True, "awaitPromise": True})
         if "exceptionDetails" in data:
-            raise RuntimeError("renderer evaluation failed")
+            raise RuntimeError("renderer evaluation failed: "+str(data["exceptionDetails"].get("text","unknown"))[:110])
         return data.get("result", {}).get("value")
     async def click(self, selector):
         js = """(() => {const el=document.querySelector(%s);
@@ -136,7 +136,7 @@ async def main():
         electron = ROOT/"node_modules/.bin/electron"
         process = subprocess.Popen(
             ["xvfb-run","-a","-s","-screen 0 1366x768x24","sh","-c",
-             'printf "%s" "$DISPLAY" > "$MCF_DISPLAY_FILE"; exec "$@"',
+             'printf "%s\\n%s\\n" "$DISPLAY" "$XAUTHORITY" > "$MCF_DISPLAY_FILE"; exec "$@"',
              "mcf-qa",str(electron),".","--instance=qa-controls",
              "--remote-debugging-port="+str(cdp_port),"--no-sandbox","--disable-gpu"],
             cwd=ROOT, env=env, stdout=logfile, stderr=subprocess.STDOUT,
@@ -150,7 +150,11 @@ async def main():
             shell = await eventually(get_shell, 20)
             assert shell, "Electron shell not found"
             global DISPLAY
-            DISPLAY = display_file.read_text() if display_file.exists() else None
+            display_details = display_file.read_text().splitlines() if display_file.exists() else []
+            DISPLAY = display_details[0] if display_details else None
+            auth_path = display_details[1] if len(display_details)>1 else None
+            assert auth_path and Path(auth_path).is_file(), "isolated X11 authority file missing"
+            env["XAUTHORITY"] = auth_path
             assert DISPLAY and DISPLAY.startswith(":")
             async with websockets.connect(shell["webSocketDebuggerUrl"],open_timeout=4,max_size=3000000) as ws:
                 c = CDP(ws)
@@ -164,8 +168,9 @@ async def main():
                     return (await c.state())[pane]["url"]
                 async def go(pane, page):
                     target=fixture+"/"+page
-                    result=await c.js("window.cockpit.browser.navigate(%s,%s)"%(json.dumps(pane),json.dumps(target)))
-                    assert result["ok"]
+                    result=await c.js("window.cockpit.browser.navigate(%s,%s).catch(() => ({ok:false}))"%(json.dumps(pane),json.dumps(target)))
+                    # Chromium may report a cancelled prior navigation while the new
+                    # fixture already loaded; only the final observed URL is accepted.
                     async def matches_target(): return (await url(pane))==target
                     assert await eventually(matches_target)
                 async def show(tab):
