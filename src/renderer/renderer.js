@@ -30,6 +30,7 @@ const states = { chat: null, workspace: null };
 const PAGE_COPY = {
   overview: ['Visão geral', 'Estado operacional do cockpit, bridge e runtime local.'],
   observability: ['Observabilidade', 'Eventos locais, estados das missões, identidades e evidências resumidas.'],
+  capabilities: ['Mecanismos', 'Inventário verificável de controles, IPC e Bridge.'],
   settings: ['Configurações', 'Preferências persistidas para inicialização e monitoramento.'],
 };
 
@@ -380,6 +381,7 @@ function switchControlPage(name) {
   document.getElementById('controlTitle').textContent = PAGE_COPY[name][0];
   document.getElementById('controlDescription').textContent = PAGE_COPY[name][1];
   if (name === 'settings') fillSettingsForm();
+  else if (name === 'capabilities') refreshControlCatalog();
   else refreshControlSnapshot();
 }
 
@@ -558,6 +560,40 @@ document.querySelectorAll('[data-control-tab]').forEach(button => {
 document.querySelectorAll('[data-open-tab]').forEach(button => {
   button.addEventListener('click', () => switchControlPage(button.dataset.openTab));
 });
+// Display sanitized discovery data using text nodes only, never HTML injection.
+async function refreshControlCatalog() {
+  const status=document.getElementById('catalogStatus');
+  const target=document.getElementById('catalogList');
+  status.textContent='Consultando mecanismos locais…';
+  try {
+    const result=await api.discovery.getCatalog();
+    if (!result?.ok || !result?.catalog) throw new Error('catalog_unavailable');
+    const catalog=result.catalog;
+    document.getElementById('catalogCount').textContent=
+      String(catalog.counts.uiControls + catalog.counts.ipcChannels + catalog.counts.bridgeRoutes);
+    status.textContent=`${catalog.counts.uiControls} controles · ${catalog.counts.ipcChannels} IPC · ${catalog.counts.bridgeRoutes} rotas HTTP`;
+    const records=[
+      ...catalog.uiControls.map(c=>[c.id, `${c.action} · ${c.channel || 'ação local'} · ${c.risk}`]),
+      ...catalog.ipcChannels.map(c=>[c.channel, `IPC · ${c.authorization} · ${c.risk}`]),
+      ...catalog.bridgeRoutes.map(c=>[`${c.method} ${c.path}`, `Bridge · ${c.effect} · ${c.authorization}`]),
+    ];
+    const fragment=document.createDocumentFragment();
+    for (const [name,description] of records) {
+      const row=document.createElement('div');row.className='status-row';
+      const title=document.createElement('span');title.className='status-label';title.textContent=name;
+      const details=document.createElement('span');details.className='status-value';details.textContent=description;
+      row.append(title,details);fragment.appendChild(row);
+    }
+    target.replaceChildren(fragment);
+  } catch(error) {status.textContent='Descoberta indisponível: '+String(error?.message || error);}
+}
+
+document.getElementById('catalogRefresh').addEventListener('click', refreshControlCatalog);
+document.getElementById('catalogCopy').addEventListener('click',async()=>{
+  const result=await api.discovery.copyCatalog();
+  setToast(result?.ok ? 'Catálogo sem credenciais copiado.' : 'Não foi possível copiar catálogo.',result?.ok ? 'ok' : 'error');
+});
+
 document.getElementById('settingsForm').addEventListener('submit', saveSettingsForm);
 document.getElementById('settingsAutomationToggle').addEventListener('click', async () => {
   const button = document.getElementById('settingsAutomationToggle');

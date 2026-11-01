@@ -1,5 +1,21 @@
 # MCF Dual Browser Cockpit
 
+## Descoberta atômica de mecanismos (0.7.5)
+
+**Este é o repositório próprio do aplicativo.** O inventário canônico e verificável de **controles UI, IPC e HTTP** está em [`capabilities/control-catalog.v1.json`](capabilities/control-catalog.v1.json), com explicação e tabela completa em [`docs/CONTROL-CATALOG-V1.md`](docs/CONTROL-CATALOG-V1.md).
+
+```bash
+# Estado atual + inventário resumido (sem exibir bearer token)
+node bin/mcf-cockpit-discover.mjs --instance=notebook --summary
+# Contrato completo em JSON, mesmo sem a aplicação em execução
+node bin/mcf-cockpit-discover.mjs --offline
+```
+
+Com a Bridge ativa, um cliente local autenticado pode fazer `GET /v1/control-catalog` (somente leitura, inclusive em PAUSE); a interface oferece **CONTROLE → Mecanismos** e cópia de JSON sanitizado. O catálogo **não executa** ações nem permite IPC arbitrário: comandos nativos continuam restritos à janela confiável e as rotas POST aplicam seus gates. Use `GET /v1/discovery` para o estado operacional das identidades e missões; não confunda existência de rota com permissão de execução.
+
+**Teste/validação:** `npm test`, `node --test test/control-catalog.test.mjs test/bridge-modern-dom.test.mjs`; smoke Electron isolado antes de atualizar a instalação. O mecanismo TRI 0.8.0 permanece fora deste escopo 0.7.5. Faça backup de perfil e launcher, com rollback dedicado, antes de substituir a versão funcional.
+
+
 Aplicação desktop para manter **duas superfícies de navegação independentes** na mesma janela:
 
 - **LEANDRO / ChatGPT** à esquerda — sessão persistente própria;
