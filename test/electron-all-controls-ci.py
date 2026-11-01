@@ -53,6 +53,7 @@ class CDP:
     async def click(self, selector):
         js = """(() => {const el=document.querySelector(%s);
           if(!el || el.disabled) return null;
+          el.scrollIntoView({block:'center',inline:'nearest'});
           const r=el.getBoundingClientRect();
           if(r.width<2||r.height<2 || getComputedStyle(el).visibility==='hidden')return null;
           return {x:r.x+r.width/2,y:r.y+r.height/2};})()""" % json.dumps(selector)
@@ -213,17 +214,21 @@ async def main():
                 def clipboard():
                     response = subprocess.run(["xclip","-selection","clipboard","-o"],
                                               env={**env,"DISPLAY":DISPLAY},capture_output=True,timeout=3)
-                    if response.returncode!=0:raise AssertionError("clipboard unavailable")
+                    if response.returncode!=0:raise AssertionError("clipboard read failed rc="+str(response.returncode)+" stderr="+response.stderr.decode(errors='replace')[:100])
                     return response.stdout.decode("utf-8",errors="replace")
                 async def copy_token():
                     assert await eventually(lambda:c.js('!document.getElementById("copyTokenButton").classList.contains("hidden")'))
                     await c.click("#copyTokenButton")
-                    assert await eventually(lambda:asyncio.sleep(0,result=clipboard()==json.loads(descriptor.read_text())["token"]))
+                    assert await eventually(lambda:asyncio.sleep(0,result=clipboard().strip()==(await c.bridge())["token"]))
                     return "isolated clipboard matches ephemeral token; value not logged"
                 await tested("#copyTokenButton",copy_token)
                 async def navigate_action(pane,action):
                     if action in ("back","forward","reload"):
                         await go(pane,"a");await go(pane,"b")
+                        if action=="forward":
+                            await c.js('window.cockpit.browser.action(%s,"back")'%json.dumps(pane))
+                            async def at_previous():return (await url(pane))==fixture+"/a"
+                            assert await eventually(at_previous), "cannot prime forward history"
                         await c.click('[data-pane="'+pane+'"][data-action="'+action+'"]')
                         expected="a" if action=="back" else "b"
                         async def history_matches(): return (await url(pane))==fixture+"/"+expected
@@ -262,7 +267,9 @@ async def main():
                     pt=await c.js('''(() => {const r=document.getElementById("toolbarSplitter").getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()''')
                     await c.cmd("Input.dispatchMouseEvent",{"type":"mouseMoved",**pt})
                     await c.cmd("Input.dispatchMouseEvent",{"type":"mousePressed",**pt,"button":"left","clickCount":1})
-                    await c.cmd("Input.dispatchMouseEvent",{"type":"mouseMoved","x":pt["x"]+120,"y":pt["y"],"buttons":1})
+                    for displacement in (25,55,85,120):
+                        await c.cmd("Input.dispatchMouseEvent",{"type":"mouseMoved","x":pt["x"]+displacement,"y":pt["y"],"button":"left","buttons":1})
+                        await asyncio.sleep(.04)
                     await c.cmd("Input.dispatchMouseEvent",{"type":"mouseReleased","x":pt["x"]+120,"y":pt["y"],"button":"left","clickCount":1})
                     async def changed():return abs((await c.state())["splitRatio"]-old)>.02
                     assert await eventually(changed)
