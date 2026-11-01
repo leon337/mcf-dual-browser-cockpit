@@ -219,7 +219,8 @@ async def main():
                 async def copy_token():
                     assert await eventually(lambda:c.js('!document.getElementById("copyTokenButton").classList.contains("hidden")'))
                     await c.click("#copyTokenButton")
-                    assert await eventually(lambda:asyncio.sleep(0,result=clipboard().strip()==(await c.bridge())["token"]))
+                    async def copied():return clipboard().strip()==(await c.bridge())["token"]
+                    assert await eventually(copied)
                     return "isolated clipboard matches ephemeral token; value not logged"
                 await tested("#copyTokenButton",copy_token)
                 async def navigate_action(pane,action):
