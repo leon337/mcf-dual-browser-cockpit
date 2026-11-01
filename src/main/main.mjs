@@ -5,6 +5,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LocalAgentBridge } from './bridge.mjs';
+import { buildControlCatalog } from './control-catalog.mjs';
 import { PaneAgentRuntime } from './agent-runtime.mjs';
 import { agentBindingsForProfile, agentMissionIdForProfile } from './agent-identity.mjs';
 import { isGenerationStopControl, isTargetGenerationActive } from './generation-control.mjs';
@@ -2148,6 +2149,20 @@ function handleTrusted(channel, handler) {
     return handler(event, ...args);
   });
 }
+
+function localControlCatalog() {
+  const state=bridge?.getState() ?? {enabled:false,paused:false,busy:false,queueDepth:0};
+  const paneStates=['chat','workspace'].map(pane=>{
+    const wc=getPane(pane);
+    return {pane,available:Boolean(wc && !wc.isDestroyed?.()),loading:Boolean(wc?.isLoading?.())};
+  });
+  return buildControlCatalog({bridgeState:state,paneStates});
+}
+handleTrusted('control:catalog', () => ({ok:true,catalog:localControlCatalog()}));
+handleTrusted('control:copy-catalog', () => {
+  clipboard.writeText(JSON.stringify(localControlCatalog(),null,2));
+  return {ok:true,format:'application/json',containsCredentials:false};
+});
 
 handleTrusted('bridge:pause', () => {
   const state = bridge.setPaused(!bridge.paused);

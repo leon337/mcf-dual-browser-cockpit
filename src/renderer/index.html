@@ -87,6 +87,7 @@
       <nav class="control-nav" aria-label="Seções do painel">
         <button class="control-tab active" data-control-tab="overview" aria-selected="true"><span>◫</span><span><strong>Visão geral</strong><small>Saúde da execução</small></span></button>
         <button class="control-tab" data-control-tab="observability" aria-selected="false"><span>⌁</span><span><strong>Observabilidade</strong><small>Eventos, missões e agentes</small></span></button>
+        <button class="control-tab" data-control-tab="capabilities" aria-selected="false"><span>◇</span><span><strong>Mecanismos</strong><small>Descoberta e inventário</small></span></button>
         <div class="sidebar-section-label settings-label">PREFERÊNCIAS</div>
         <button class="control-tab" data-control-tab="settings" aria-selected="false"><span>⚙</span><span><strong>Configurações</strong><small>Inicialização e atualização</small></span></button>
       </nav>
@@ -161,6 +162,16 @@
           <article class="panel-card full-panel">
             <div class="panel-heading"><div><h2>Receipts recentes</h2><p>Registros resumidos de evidência; payloads completos são mantidos fora desta visualização.</p></div><span id="receiptCountLabel" class="count-pill">0</span></div>
             <div id="receiptList" class="record-list"><div class="empty-state">Nenhum receipt disponível.</div></div>
+          </article>
+        </section>
+
+        <section class="control-page hidden" data-control-page="capabilities">
+          <article class="panel-card full-panel">
+            <div class="panel-heading"><div><h2>Inventário de mecanismos</h2><p>Mapa de controles UI, canais IPC e rotas HTTP. Apenas leitura; nenhuma ação é executada nesta página.</p></div><span class="count-pill" id="catalogCount">—</span></div>
+            <p id="catalogStatus" role="status" aria-live="polite">Aguardando descoberta.</p>
+            <div class="settings-actions"><button id="catalogRefresh" type="button" class="secondary-button">↻ Atualizar inventário</button><button id="catalogCopy" type="button" class="secondary-button">Copiar catálogo JSON</button></div>
+            <div class="status-list" id="catalogList"><div class="empty-state">Nenhum mecanismo carregado.</div></div>
+            <div class="privacy-note"><span>🔒</span><span>O catálogo não inclui tokens nem credenciais. IPC não pode ser invocado pela API HTTP; operações dependem de seus gates próprios.</span></div>
           </article>
         </section>
 

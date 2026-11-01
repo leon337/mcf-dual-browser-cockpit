@@ -1,6 +1,10 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('cockpit', {
+  discovery: {
+    getCatalog: () => ipcRenderer.invoke('control:catalog'),
+    copyCatalog: () => ipcRenderer.invoke('control:copy-catalog'),
+  },
   layout: {
     setSplit: (ratio) => ipcRenderer.invoke('layout:set-split', ratio),
     preset: (preset) => ipcRenderer.invoke('layout:preset', preset),

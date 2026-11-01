@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { LiveAgentEventBus } from './live-agent-events.mjs';
 import { isGenerationStopControl } from './generation-control.mjs';
 import { buildRuntimeDiscovery } from './runtime-discovery.mjs';
+import { buildControlCatalog } from './control-catalog.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -682,12 +683,19 @@ export class LocalAgentBridge {
         const s = getComputedStyle(el);
         return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
       };
-      const userMessages = [...document.querySelectorAll('[data-message-author-role="user"]')];
+      // ChatGPT's 2026 UI uses data-user-message-bubble instead of
+      // data-message-author-role. Preserve compatibility with the older DOM.
+      const modernUserMessages = [...document.querySelectorAll('[data-user-message-bubble]')];
+      const userMessages = modernUserMessages.length ? modernUserMessages
+        : [...document.querySelectorAll('[data-message-author-role="user"]')];
       const assistantMessages = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
+      const userTurnId = element => element?.getAttribute('data-message-id')
+        || element?.closest('[data-chatgpt-search-message-ids]')?.getAttribute('data-chatgpt-search-message-ids')
+        || null;
       const baseline = {
         url: location.href,
         userMessageCount: userMessages.length,
-        lastUserMessageId: userMessages.at(-1)?.getAttribute('data-message-id') || null,
+        lastUserMessageId: userTurnId(userMessages.at(-1)),
         lastAssistantMessageId: assistantMessages.at(-1)?.getAttribute('data-message-id') || null,
       };
       const findComposer = () => document.querySelector('#prompt-textarea')
@@ -918,6 +926,7 @@ export class LocalAgentBridge {
       await new Promise(resolve => setTimeout(resolve, 150));
       verification = await wc.executeJavaScript(`(() => {
         const baselineUrl = ${JSON.stringify(baselineUrl)};
+        const expectedMessage = ${JSON.stringify(message)};
         const baselineUserMessageCount = ${baselineUserMessageCount};
         const baselineLastUserMessageId = ${JSON.stringify(baselineLastUserMessageId)};
         const baselineLastAssistantMessageId = ${JSON.stringify(baselineLastAssistantMessageId)};
@@ -926,22 +935,40 @@ export class LocalAgentBridge {
           || document.querySelector('[contenteditable="true"]');
         const text = composer ? String(composer.innerText || composer.value || '').trim() : '';
         const url = location.href;
-        const userMessages = [...document.querySelectorAll('[data-message-author-role="user"]')];
+        const modernUserMessages = [...document.querySelectorAll('[data-user-message-bubble]')];
+        const userMessages = modernUserMessages.length ? modernUserMessages
+          : [...document.querySelectorAll('[data-message-author-role="user"]')];
         const assistantMessages = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
         const userMessageCount = userMessages.length;
-        const lastUserMessageId = userMessages.at(-1)?.getAttribute('data-message-id') || null;
+        const latestUser = userMessages.at(-1) || null;
+        const lastUserMessageId = latestUser?.getAttribute('data-message-id')
+          || latestUser?.closest('[data-chatgpt-search-message-ids]')?.getAttribute('data-chatgpt-search-message-ids')
+          || null;
         const lastAssistantMessageId = assistantMessages.at(-1)?.getAttribute('data-message-id') || null;
+        const normalize = value => String(value || '').replace(/\\s+/g, ' ').trim();
+        const messageMatchesLastUserTurn = Boolean(latestUser)
+          && normalize(latestUser.innerText || latestUser.textContent || '') === normalize(expectedMessage);
         const composerCleared = !composer || text.length === 0;
+        // An identical user turn in another conversation is not delivery here.
+        const baselineConversationId = baselineUrl.match(/\\/c\\/([^/?#]+)/)?.[1] || null;
+        const currentConversationId = location.pathname.match(/\\/c\\/([^/?#]+)/)?.[1] || null;
+        const conversationBindingPreserved = !baselineConversationId
+          || currentConversationId === baselineConversationId;
         const conversationAdvanced = Boolean(
           (lastUserMessageId && lastUserMessageId !== baselineLastUserMessageId)
           || userMessageCount > baselineUserMessageCount
           || (url !== baselineUrl && /\\/c\\/[^/]+/.test(location.pathname))
         );
+        // Never infer delivery from an empty composer or unrelated new turn.
+        const sent = composerCleared && conversationAdvanced && messageMatchesLastUserTurn
+          && conversationBindingPreserved;
         return {
           ok: true,
           composerCleared,
           conversationAdvanced,
-          sent: composerCleared && conversationAdvanced,
+          messageMatchesLastUserTurn,
+          conversationBindingPreserved,
+          sent,
           url,
           userMessageCount,
           lastUserMessageId,
@@ -949,10 +976,10 @@ export class LocalAgentBridge {
           baselineLastAssistantMessageId,
         };
       })()`, true).catch(() => null);
-      if (verification?.sent) break;
+      if (verification?.sent && verification?.messageMatchesLastUserTurn === true) break;
     }
 
-    if (!verification?.sent) {
+    if (!verification?.sent || verification?.messageMatchesLastUserTurn !== true) {
       const cleanup = await this.#cleanupComposerDraft(wc);
       return {
         ok: false,
@@ -1106,6 +1133,18 @@ export class LocalAgentBridge {
           ?? null;
         this.liveEvents.attach(req, res, { after });
         return;
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/control-catalog') {
+        const paneStates=['chat','workspace'].map(pane=>{
+          const wc=this.getPaneWebContents?.(pane);
+          return {pane,available:Boolean(wc && !wc.isDestroyed?.()),
+            loading:Boolean(wc?.isLoading?.())};
+        });
+        return json(res, 200, {ok:true,catalog:buildControlCatalog({
+          bridgeState:{...this.getState(),busy:this.busy,queueDepth:this.mutationQueue.length},
+          paneStates,
+        })});
       }
 
       if (req.method === 'GET' && requestUrl.pathname === '/v1/discovery') {

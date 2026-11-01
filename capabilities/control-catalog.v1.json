@@ -1,0 +1,930 @@
+{
+  "schema": "mcf-dual-browser-control-catalog/v1",
+  "application": "MCF Dual Browser Cockpit",
+  "baselineVersion": "0.7.5",
+  "ownerRepository": "https://github.com/leon337/mcf-dual-browser-cockpit",
+  "contract": {
+    "discovery": "GET /v1/control-catalog (authenticated, read-only)",
+    "native": "window.cockpit.discovery.getCatalog() (trusted renderer only)",
+    "localCli": "node bin/mcf-cockpit-discover.mjs --instance=notebook",
+    "noGenericExecute": true,
+    "noTokenInPayload": true,
+    "twoPanedOnly": true,
+    "bridgeRequiresLocalDescriptor": true
+  },
+  "limitations": [
+    "Buttons in cockpit shell do not have a generic bridge invoke route; IPC can only originate in trusted renderer.",
+    "HTTP POST is gated by PAUSE and individual endpoint policy; a route does not imply operational authorization.",
+    "Agent identity UNBOUND is not READY; browser delivery does not prove canonical agent signature.",
+    "Copying token to clipboard requires the native UI and can expose a secret to other local applications.",
+    "External navigation, capture and settings are side-effectful; tests use isolated profiles.",
+    "This baseline is 0.7.5 dual-pane, not TRI-agent 0.8.0."
+  ],
+  "uiControls": [
+    {
+      "id": "[data-preset=\"leandro\"]",
+      "selector": "[data-preset=\"leandro\"]",
+      "tag": "button",
+      "label": "Mais espaço para o ChatGPT",
+      "native": true,
+      "visibleConditional": false,
+      "action": "layout.preset",
+      "channel": "layout:preset",
+      "authority": "trusted-renderer",
+      "risk": "changes-layout",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-preset=\"balanced\"]",
+      "selector": "[data-preset=\"balanced\"]",
+      "tag": "button",
+      "label": "Divisão equilibrada",
+      "native": true,
+      "visibleConditional": false,
+      "action": "layout.preset",
+      "channel": "layout:preset",
+      "authority": "trusted-renderer",
+      "risk": "changes-layout",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-preset=\"mestre\"]",
+      "selector": "[data-preset=\"mestre\"]",
+      "tag": "button",
+      "label": "Mais espaço para o navegador operacional",
+      "native": true,
+      "visibleConditional": false,
+      "action": "layout.preset",
+      "channel": "layout:preset",
+      "authority": "trusted-renderer",
+      "risk": "changes-layout",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "controlCenterButton",
+      "selector": "#controlCenterButton",
+      "tag": "button",
+      "label": "Abrir configurações e observabilidade",
+      "native": true,
+      "visibleConditional": false,
+      "action": "open/closeControlCenter",
+      "channel": "layout:set-mode",
+      "authority": "trusted-renderer",
+      "risk": "changes-layout",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "bridgeButton",
+      "selector": "#bridgeButton",
+      "tag": "button",
+      "label": "Ativa API local para automação do navegador da direita",
+      "native": true,
+      "visibleConditional": false,
+      "action": "bridge.toggle",
+      "channel": "bridge:toggle",
+      "authority": "trusted-renderer",
+      "risk": "changes-bridge-state",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "pauseBridgeButton",
+      "selector": "#pauseBridgeButton",
+      "tag": "button",
+      "label": "Bloqueia novas ações; a ação em curso pode terminar",
+      "native": true,
+      "visibleConditional": false,
+      "action": "bridge.pause",
+      "channel": "bridge:pause",
+      "authority": "trusted-renderer",
+      "risk": "changes-pause-state",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "copyTokenButton",
+      "selector": "#copyTokenButton",
+      "tag": "button",
+      "label": "Copiar token da bridge",
+      "native": true,
+      "visibleConditional": true,
+      "action": "bridge.copyToken",
+      "channel": "bridge:copy-token",
+      "authority": "trusted-renderer",
+      "risk": "credential-to-clipboard",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-pane=\"chat\"][data-action=\"back\"]",
+      "selector": "[data-pane=\"chat\"][data-action=\"back\"]",
+      "tag": "button",
+      "label": "Voltar",
+      "native": true,
+      "visibleConditional": false,
+      "action": "browser.action",
+      "channel": "browser:action",
+      "authority": "trusted-renderer",
+      "risk": "mutates-browser",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-pane=\"chat\"][data-action=\"forward\"]",
+      "selector": "[data-pane=\"chat\"][data-action=\"forward\"]",
+      "tag": "button",
+      "label": "Avançar",
+      "native": true,
+      "visibleConditional": false,
+      "action": "browser.action",
+      "channel": "browser:action",
+      "authority": "trusted-renderer",
+      "risk": "mutates-browser",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-pane=\"chat\"][data-action=\"reload\"]",
+      "selector": "[data-pane=\"chat\"][data-action=\"reload\"]",
+      "tag": "button",
+      "label": "Recarregar",
+      "native": true,
+      "visibleConditional": false,
+      "action": "browser.action",
+      "channel": "browser:action",
+      "authority": "trusted-renderer",
+      "risk": "mutates-browser",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-pane=\"chat\"][data-action=\"home\"]",
+      "selector": "[data-pane=\"chat\"][data-action=\"home\"]",
+      "tag": "button",
+      "label": "ChatGPT",
+      "native": true,
+      "visibleConditional": false,
+      "action": "browser.action",
+      "channel": "browser:action",
+      "authority": "trusted-renderer",
+      "risk": "mutates-browser",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-pane=\"chat\"][data-action=\"devtools\"]",
+      "selector": "[data-pane=\"chat\"][data-action=\"devtools\"]",
+      "tag": "button",
+      "label": "DevTools",
+      "native": true,
+      "visibleConditional": false,
+      "action": "browser.action",
+      "channel": "browser:action",
+      "authority": "trusted-renderer",
+      "risk": "mutates-browser",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-external=\"chat\"]",
+      "selector": "[data-external=\"chat\"]",
+      "tag": "button",
+      "label": "Abrir no navegador padrão",
+      "native": true,
+      "visibleConditional": false,
+      "action": "browser.openExternal",
+      "channel": "browser:open-external",
+      "authority": "trusted-renderer",
+      "risk": "external-navigation",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "toolbarSplitter",
+      "selector": "#toolbarSplitter",
+      "tag": "div",
+      "label": "Arraste para redimensionar",
+      "native": true,
+      "visibleConditional": false,
+      "action": "layout.setSplit / local pointer",
+      "channel": "layout:set-split",
+      "authority": "trusted-renderer",
+      "risk": "changes-layout",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-pane=\"workspace\"][data-action=\"back\"]",
+      "selector": "[data-pane=\"workspace\"][data-action=\"back\"]",
+      "tag": "button",
+      "label": "Voltar",
+      "native": true,
+      "visibleConditional": false,
+      "action": "browser.action",
+      "channel": "browser:action",
+      "authority": "trusted-renderer",
+      "risk": "mutates-browser",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-pane=\"workspace\"][data-action=\"forward\"]",
+      "selector": "[data-pane=\"workspace\"][data-action=\"forward\"]",
+      "tag": "button",
+      "label": "Avançar",
+      "native": true,
+      "visibleConditional": false,
+      "action": "browser.action",
+      "channel": "browser:action",
+      "authority": "trusted-renderer",
+      "risk": "mutates-browser",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-pane=\"workspace\"][data-action=\"reload\"]",
+      "selector": "[data-pane=\"workspace\"][data-action=\"reload\"]",
+      "tag": "button",
+      "label": "Recarregar",
+      "native": true,
+      "visibleConditional": false,
+      "action": "browser.action",
+      "channel": "browser:action",
+      "authority": "trusted-renderer",
+      "risk": "mutates-browser",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-pane=\"workspace\"][data-action=\"home\"]",
+      "selector": "[data-pane=\"workspace\"][data-action=\"home\"]",
+      "tag": "button",
+      "label": "Página inicial",
+      "native": true,
+      "visibleConditional": false,
+      "action": "browser.action",
+      "channel": "browser:action",
+      "authority": "trusted-renderer",
+      "risk": "mutates-browser",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "workspaceAddress",
+      "selector": "#workspaceAddress",
+      "tag": "input",
+      "label": "Endereço ou pesquisa",
+      "native": true,
+      "visibleConditional": false,
+      "action": "browser.navigate",
+      "channel": "browser:navigate",
+      "authority": "trusted-renderer",
+      "risk": "external-navigation",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "goButton",
+      "selector": "#goButton",
+      "tag": "button",
+      "label": "Abrir",
+      "native": true,
+      "visibleConditional": false,
+      "action": "browser.navigate",
+      "channel": "browser:navigate",
+      "authority": "trusted-renderer",
+      "risk": "external-navigation",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "captureButton",
+      "selector": "#captureButton",
+      "tag": "button",
+      "label": "Capturar janela de trabalho",
+      "native": true,
+      "visibleConditional": false,
+      "action": "workspace.capture",
+      "channel": "workspace:capture",
+      "authority": "trusted-renderer",
+      "risk": "writes-screenshot",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-pane=\"workspace\"][data-action=\"devtools\"]",
+      "selector": "[data-pane=\"workspace\"][data-action=\"devtools\"]",
+      "tag": "button",
+      "label": "DevTools",
+      "native": true,
+      "visibleConditional": false,
+      "action": "browser.action",
+      "channel": "browser:action",
+      "authority": "trusted-renderer",
+      "risk": "mutates-browser",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-external=\"workspace\"]",
+      "selector": "[data-external=\"workspace\"]",
+      "tag": "button",
+      "label": "Abrir no navegador padrão",
+      "native": true,
+      "visibleConditional": false,
+      "action": "browser.openExternal",
+      "channel": "browser:open-external",
+      "authority": "trusted-renderer",
+      "risk": "external-navigation",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-control-tab=\"overview\"]",
+      "selector": "[data-control-tab=\"overview\"]",
+      "tag": "button",
+      "label": "[data-control-tab=\"overview\"]",
+      "native": true,
+      "visibleConditional": false,
+      "action": "switchControlPage",
+      "channel": null,
+      "authority": "trusted-renderer",
+      "risk": "changes-ui-only",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-control-tab=\"observability\"]",
+      "selector": "[data-control-tab=\"observability\"]",
+      "tag": "button",
+      "label": "[data-control-tab=\"observability\"]",
+      "native": true,
+      "visibleConditional": false,
+      "action": "switchControlPage",
+      "channel": null,
+      "authority": "trusted-renderer",
+      "risk": "changes-ui-only",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-control-tab=\"settings\"]",
+      "selector": "[data-control-tab=\"settings\"]",
+      "tag": "button",
+      "label": "[data-control-tab=\"settings\"]",
+      "native": true,
+      "visibleConditional": false,
+      "action": "switchControlPage",
+      "channel": null,
+      "authority": "trusted-renderer",
+      "risk": "changes-ui-only",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "refreshControlButton",
+      "selector": "#refreshControlButton",
+      "tag": "button",
+      "label": "refreshControlButton",
+      "native": true,
+      "visibleConditional": false,
+      "action": "refreshControlSnapshot",
+      "channel": "bridge:get-observability",
+      "authority": "trusted-renderer",
+      "risk": "read-only",
+      "invocation": "trusted renderer read; see IPC/API where available"
+    },
+    {
+      "id": "closeControlCenter",
+      "selector": "#closeControlCenter",
+      "tag": "button",
+      "label": "closeControlCenter",
+      "native": true,
+      "visibleConditional": false,
+      "action": "closeControlCenter",
+      "channel": "layout:set-mode",
+      "authority": "trusted-renderer",
+      "risk": "changes-layout",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-open-tab=\"observability\"]",
+      "selector": "[data-open-tab=\"observability\"]",
+      "tag": "button",
+      "label": "[data-open-tab=\"observability\"]",
+      "native": true,
+      "visibleConditional": false,
+      "action": "switchControlPage",
+      "channel": null,
+      "authority": "trusted-renderer",
+      "risk": "changes-ui-only",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "settingsForm",
+      "selector": "#settingsForm",
+      "tag": "form",
+      "label": "settingsForm",
+      "native": true,
+      "visibleConditional": false,
+      "action": "settings.save",
+      "channel": "settings:save",
+      "authority": "trusted-renderer",
+      "risk": "writes-settings",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "settingsAutomationToggle",
+      "selector": "#settingsAutomationToggle",
+      "tag": "button",
+      "label": "settingsAutomationToggle",
+      "native": true,
+      "visibleConditional": false,
+      "action": "bridge.pause",
+      "channel": "bridge:pause",
+      "authority": "trusted-renderer",
+      "risk": "changes-pause-state",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "settingsStartBridge",
+      "selector": "#settingsStartBridge",
+      "tag": "input",
+      "label": "settingsStartBridge",
+      "native": true,
+      "visibleConditional": false,
+      "action": "settings.save via form",
+      "channel": "settings:save",
+      "authority": "trusted-renderer",
+      "risk": "writes-settings",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "settingsPort",
+      "selector": "#settingsPort",
+      "tag": "input",
+      "label": "settingsPort",
+      "native": true,
+      "visibleConditional": false,
+      "action": "settings.save via form",
+      "channel": "settings:save",
+      "authority": "trusted-renderer",
+      "risk": "writes-settings",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "settingsLayout",
+      "selector": "#settingsLayout",
+      "tag": "select",
+      "label": "settingsLayout",
+      "native": true,
+      "visibleConditional": false,
+      "action": "settings.save via form",
+      "channel": "settings:save",
+      "authority": "trusted-renderer",
+      "risk": "writes-settings",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "settingsRefresh",
+      "selector": "#settingsRefresh",
+      "tag": "select",
+      "label": "settingsRefresh",
+      "native": true,
+      "visibleConditional": false,
+      "action": "settings.save via form",
+      "channel": "settings:save",
+      "authority": "trusted-renderer",
+      "risk": "writes-settings",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "settingsEventLimit",
+      "selector": "#settingsEventLimit",
+      "tag": "select",
+      "label": "settingsEventLimit",
+      "native": true,
+      "visibleConditional": false,
+      "action": "settings.save via form",
+      "channel": "settings:save",
+      "authority": "trusted-renderer",
+      "risk": "writes-settings",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "saveSettingsButton",
+      "selector": "#saveSettingsButton",
+      "tag": "button",
+      "label": "saveSettingsButton",
+      "native": true,
+      "visibleConditional": false,
+      "action": "settings.save",
+      "channel": "settings:save",
+      "authority": "trusted-renderer",
+      "risk": "writes-settings",
+      "invocation": "UI only (trusted renderer); no generic HTTP executor"
+    },
+    {
+      "id": "[data-control-tab=\"capabilities\"]",
+      "selector": "[data-control-tab=\"capabilities\"]",
+      "tag": "button",
+      "label": "Mecanismos",
+      "native": true,
+      "visibleConditional": false,
+      "action": "switchControlPage",
+      "channel": null,
+      "authority": "trusted-renderer",
+      "risk": "changes-ui-only",
+      "invocation": "UI only"
+    },
+    {
+      "id": "catalogRefresh",
+      "selector": "#catalogRefresh",
+      "tag": "button",
+      "label": "Atualizar inventário",
+      "native": true,
+      "visibleConditional": false,
+      "action": "discovery.getCatalog",
+      "channel": "control:catalog",
+      "authority": "trusted-renderer",
+      "risk": "read-only",
+      "invocation": "trusted renderer read"
+    },
+    {
+      "id": "catalogCopy",
+      "selector": "#catalogCopy",
+      "tag": "button",
+      "label": "Copiar catálogo JSON",
+      "native": true,
+      "visibleConditional": false,
+      "action": "discovery.copyCatalog",
+      "channel": "control:copy-catalog",
+      "authority": "trusted-renderer",
+      "risk": "clipboard-sanitized",
+      "invocation": "trusted renderer copy of sanitized catalog"
+    }
+  ],
+  "ipcChannels": [
+    {
+      "channel": "bridge:copy-token",
+      "exposedTo": "trusted local renderer via window.cockpit",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "side-effect"
+    },
+    {
+      "channel": "bridge:get-observability",
+      "exposedTo": "trusted local renderer via window.cockpit",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "read-only"
+    },
+    {
+      "channel": "bridge:get-state",
+      "exposedTo": "trusted local renderer via window.cockpit",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "read-only"
+    },
+    {
+      "channel": "bridge:pause",
+      "exposedTo": "trusted local renderer via window.cockpit",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "side-effect"
+    },
+    {
+      "channel": "bridge:toggle",
+      "exposedTo": "trusted local renderer via window.cockpit",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "side-effect"
+    },
+    {
+      "channel": "browser:action",
+      "exposedTo": "trusted local renderer via window.cockpit",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "side-effect"
+    },
+    {
+      "channel": "browser:get-states",
+      "exposedTo": "trusted local renderer via window.cockpit",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "read-only"
+    },
+    {
+      "channel": "browser:navigate",
+      "exposedTo": "trusted local renderer via window.cockpit",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "side-effect"
+    },
+    {
+      "channel": "browser:open-external",
+      "exposedTo": "trusted local renderer via window.cockpit",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "side-effect"
+    },
+    {
+      "channel": "layout:preset",
+      "exposedTo": "trusted local renderer via window.cockpit",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "side-effect"
+    },
+    {
+      "channel": "layout:set-mode",
+      "exposedTo": "trusted local renderer via window.cockpit",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "side-effect"
+    },
+    {
+      "channel": "layout:set-split",
+      "exposedTo": "trusted local renderer via window.cockpit",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "side-effect"
+    },
+    {
+      "channel": "settings:get",
+      "exposedTo": "trusted local renderer via window.cockpit",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "read-only"
+    },
+    {
+      "channel": "settings:save",
+      "exposedTo": "trusted local renderer via window.cockpit",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "side-effect"
+    },
+    {
+      "channel": "workspace:capture",
+      "exposedTo": "trusted local renderer via window.cockpit",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "side-effect"
+    },
+    {
+      "channel": "control:catalog",
+      "exposedTo": "trusted local renderer via window.cockpit.discovery",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "read-only"
+    },
+    {
+      "channel": "control:copy-catalog",
+      "exposedTo": "trusted local renderer via window.cockpit.discovery",
+      "method": "ipcRenderer.invoke",
+      "authorization": "senderFrame+mainWindow.webContents",
+      "httpCallable": false,
+      "risk": "clipboard-sanitized"
+    }
+  ],
+  "bridgeRoutes": [
+    {
+      "method": "GET",
+      "path": "/health",
+      "authorization": "none",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/accessibility",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/action",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "requires unpaused + instance gates; conditional backend checks"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/agent-receipts",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/agent-session/open",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "requires unpaused + instance gates; conditional backend checks"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/agent-sessions",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/agents",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/agents/bootstrap",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "requires unpaused + instance gates; conditional backend checks"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/atspi",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/capture",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "requires unpaused + instance gates; conditional backend checks"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/click",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "requires unpaused + instance gates; conditional backend checks"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/discovery",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/events",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/events/snapshot",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/find-click",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "requires unpaused + instance gates; conditional backend checks"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/interactive",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/live/snapshot",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/live/stream",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/message",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "requires unpaused + instance gates; conditional backend checks"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/messages/broadcast",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "requires unpaused + instance gates; conditional backend checks"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/mission-cancel",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "requires unpaused + instance gates; conditional backend checks"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/mission-envelope",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "requires unpaused + instance gates; conditional backend checks"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/mission-reconcile",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "requires unpaused + instance gates; conditional backend checks"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/mission-result",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/mission-status",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/missions",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/navigate",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "requires unpaused + instance gates; conditional backend checks"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/parent-mission-status",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/pointer",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "requires unpaused + instance gates; conditional backend checks"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/recovery-checkpoint",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/state",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/text",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no auto dispatch"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/type",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "requires unpaused + instance gates; conditional backend checks"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/upload-file",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "requires unpaused + instance gates; conditional backend checks"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/control-catalog",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "available also when PAUSED; never returns credentials"
+    }
+  ]
+}
