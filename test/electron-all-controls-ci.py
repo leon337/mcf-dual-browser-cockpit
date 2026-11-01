@@ -165,10 +165,13 @@ async def main():
                     target=fixture+"/"+page
                     result=await c.js("window.cockpit.browser.navigate(%s,%s)"%(json.dumps(pane),json.dumps(target)))
                     assert result["ok"]
-                    assert await eventually(lambda: url(pane)==target)
+                    async def matches_target(): return (await url(pane))==target
+                    assert await eventually(matches_target)
                 async def show(tab):
                     if await c.js('document.getElementById("controlCenter").classList.contains("hidden")'):
                         await c.click("#controlCenterButton")
+                    if await c.js('!document.querySelector("[data-control-page='+tab+']").classList.contains("hidden")'):
+                        return
                     await c.click('[data-control-tab="'+tab+'"]')
                     assert await eventually(lambda:c.js('!document.querySelector("[data-control-page='+tab+']").classList.contains("hidden")'))
                 async def close():
@@ -213,6 +216,7 @@ async def main():
                     if response.returncode!=0:raise AssertionError("clipboard unavailable")
                     return response.stdout.decode("utf-8",errors="replace")
                 async def copy_token():
+                    assert await eventually(lambda:c.js('!document.getElementById("copyTokenButton").classList.contains("hidden")'))
                     await c.click("#copyTokenButton")
                     assert await eventually(lambda:asyncio.sleep(0,result=clipboard()==json.loads(descriptor.read_text())["token"]))
                     return "isolated clipboard matches ephemeral token; value not logged"
@@ -222,13 +226,15 @@ async def main():
                         await go(pane,"a");await go(pane,"b")
                         await c.click('[data-pane="'+pane+'"][data-action="'+action+'"]')
                         expected="a" if action=="back" else "b"
-                        assert await eventually(lambda:url(pane)==fixture+"/"+expected)
+                        async def history_matches(): return (await url(pane))==fixture+"/"+expected
+                        assert await eventually(history_matches)
                         return action+" fixture path=/"+expected
                     if action=="home":
                         await go(pane,"a")
                         await c.click('[data-pane="'+pane+'"][data-action="home"]')
                         expected="chatgpt.com" if pane=="chat" else "google.com"
-                        assert await eventually(lambda:asyncio.sleep(0,result=expected in str((await url(pane)))))
+                        async def at_home(): return expected in (await url(pane))
+                        assert await eventually(at_home)
                         return "home URL family verified"
                     if action=="devtools":
                         await go(pane,"a")
@@ -271,7 +277,8 @@ async def main():
                 await tested("#workspaceAddress",address)
                 async def go_button():
                     await c.click("#goButton")
-                    assert await eventually(lambda:url("workspace")==fixture+"/b")
+                    async def at_fixture_b(): return (await url("workspace"))==fixture+"/b"
+                    assert await eventually(at_fixture_b)
                     return "clicked IR and fixture URL changed"
                 await tested("#goButton",go_button)
                 async def capture():
