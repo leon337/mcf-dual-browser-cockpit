@@ -1,5 +1,17 @@
 # MCF Dual Browser Cockpit
 
+## Validação nativa dos 40 controles
+
+O pipeline [Cockpit 40-control E2E](.github/workflows/control-e2e.yml) abre o Electron com perfil descartável e registra um `PASS`, `FAIL` ou `BLOCKED` para cada seletor. A compilação Node não é substituta do E2E. O relatório `qa-artifacts/controls-e2e.json` é publicado como artefato no GitHub Actions. A instalação real não é modificada pelo workflow.
+
+```bash
+npm ci
+npm test
+python test/electron-all-controls-ci.py
+```
+
+Veja [protocolo de aceite e rollback](docs/QA-CONTROLES-40-E2E.md). A promoção fica bloqueada se nem todos os 40 controles tiverem evidência satisfatória.
+
 ## Descoberta atômica de mecanismos (0.7.5)
 
 **Este é o repositório próprio do aplicativo.** O inventário canônico e verificável de **controles UI, IPC e HTTP** está em [`capabilities/control-catalog.v1.json`](capabilities/control-catalog.v1.json), com explicação e tabela completa em [`docs/CONTROL-CATALOG-V1.md`](docs/CONTROL-CATALOG-V1.md).

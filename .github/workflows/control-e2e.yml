@@ -1,0 +1,61 @@
+name: Cockpit 40-control E2E
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/control-e2e.yml"
+      - "test/electron-all-controls-ci.py"
+      - "src/**"
+      - "capabilities/**"
+      - "package*.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cockpit-controls-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  controls-e2e:
+    name: 40 controls / native Electron sandbox
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CI: "true"
+      ELECTRON_DISABLE_SECURITY_WARNINGS: "false"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Linux display and clipboard dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y xvfb xclip libnss3 libgtk-3-0 libgbm1 libasound2t64
+      - name: Install Electron and test runner
+        run: |
+          npm ci
+          python -m pip install 'websockets==14.2'
+      - name: Source and regression checks
+        run: |
+          npm test
+          python -m py_compile test/electron-all-controls-ci.py
+      - name: Exercise all declared controls through real Electron and CDP
+        run: python test/electron-all-controls-ci.py
+      - name: Upload auditable per-selector evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cockpit-control-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            qa-artifacts/controls-e2e.json
+            qa-artifacts/electron-qa.log
+          if-no-files-found: warn
+          retention-days: 14
