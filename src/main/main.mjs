@@ -1,4 +1,5 @@
 import { clickChatGPTSendOnce, resolveChatGPTComposer } from './chatgpt-semantic-send.mjs';
+import { safeRendererEventSend } from './safe-renderer-event.mjs';
 import { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, session, screen } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -104,7 +105,7 @@ function safeState(key, wc) {
 function emitState(key, wc) {
   viewState[key] = safeState(key, wc);
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('browser:state', { pane: key, ...viewState[key] });
+    safeRendererEventSend(mainWindow.webContents, 'browser:state', { pane: key, ...viewState[key] });
   }
   bridge?.publishLiveEvent({
     type: 'PANE_STATE',
@@ -117,7 +118,7 @@ function emitState(key, wc) {
 
 function emitBridgeEvent(payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('bridge:event', { timestamp: Date.now(), ...payload });
+    safeRendererEventSend(mainWindow.webContents, 'bridge:event', { timestamp: Date.now(), ...payload });
   }
 }
 

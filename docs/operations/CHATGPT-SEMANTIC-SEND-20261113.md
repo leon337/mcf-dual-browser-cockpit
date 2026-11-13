@@ -30,3 +30,14 @@
 ## Governance
 
 LEANDRO requested continued correction. MESTRE coordinated an isolated branch. Merge, production deployment and forced reconciliation remain unapproved. Independent review and release qualification are required before promotion.
+
+## Workstation qualification — additional regression pass
+
+- Host: `leo-N43SM`, Ubuntu 24.04, AMD Radeon RX 580 2048SP (Mesa radeonsi/RADV).
+- Direct GLX: AMD hardware renderer, direct rendering enabled.
+- Surfaceless EGL/GLES: AMD render context created; 64×64 color clear; readback `RGBA=[51,102,153,255]` with `GL_ERROR=0x0`; **GPU hardware smoke PASS**.
+- Node/Electron automated tests: **126/126 PASS**.
+- Isolated real Electron smoke using `xvfb-run`, separate temp `XDG_CONFIG_HOME`: **PASS**, 2 profile instances, distinct bridges, duplicate lock, password redaction, state persistence, restart restoration.
+- Note: `Xvfb` is virtual-screen rendering; do not claim Electron test itself ran on AMD GPU. Original smoke invocation with `MCF_TEST_BINARY` incorrectly passed a generic Electron binary rather than a packaged app; rerun with correct app path passed.
+- Teardown logs included a Chromium GPU-process failure on virtual X11 and a disposed-render-frame send race; the latter is now handled as a nonfatal notification loss by `safeRendererEventSend` (durable Bridge ledger unaffected), with targeted tests.
+- No existing ChatGPT installation or logged-in profile changed. No live authenticated ChatGPT message was dispatched in this pass.
