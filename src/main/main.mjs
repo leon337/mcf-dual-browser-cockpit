@@ -1,3 +1,5 @@
+import { clickChatGPTSendOnce, resolveChatGPTComposer } from './chatgpt-semantic-send.mjs';
+import { safeRendererEventSend } from './safe-renderer-event.mjs';
 import { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, session, screen } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -103,7 +105,7 @@ function safeState(key, wc) {
 function emitState(key, wc) {
   viewState[key] = safeState(key, wc);
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('browser:state', { pane: key, ...viewState[key] });
+    safeRendererEventSend(mainWindow.webContents, 'browser:state', { pane: key, ...viewState[key] });
   }
   bridge?.publishLiveEvent({
     type: 'PANE_STATE',
@@ -116,7 +118,7 @@ function emitState(key, wc) {
 
 function emitBridgeEvent(payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('bridge:event', { timestamp: Date.now(), ...payload });
+    safeRendererEventSend(mainWindow.webContents, 'bridge:event', { timestamp: Date.now(), ...payload });
   }
 }
 
@@ -1549,12 +1551,8 @@ async function waitForChatComposer(wc, timeoutMs = 30000) {
         const s = getComputedStyle(el);
         return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
       };
-      const nodes = [
-        document.querySelector('#prompt-textarea'),
-        document.querySelector('textarea'),
-        ...document.querySelectorAll('[contenteditable="true"]')
-      ].filter(Boolean);
-      return nodes.some(visible);
+      const selected = (${resolveChatGPTComposer.toString()})(document);
+      return selected.ok;
     })()`, true).catch(() => false);
     if (found) return true;
     await sleep(500);
@@ -1573,13 +1571,13 @@ async function injectAgentBootstrap(wc, bootstrap) {
       const s = getComputedStyle(el);
       return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
     };
-    const nodes = [
-      document.querySelector('#prompt-textarea'),
-      document.querySelector('textarea'),
-      ...document.querySelectorAll('[contenteditable="true"]')
-    ].filter(Boolean);
-    const el = nodes.find(visible);
-    if (!el) return { ok:false, error:'chat_composer_not_found' };
+    const selected = (${resolveChatGPTComposer.toString()})(document);
+    const el = selected.ok ? selected.element : null;
+    if (!el) return { ok:false, error:selected.error || 'chat_composer_not_found' };
+    const existingDraft = String(el.innerText || el.value || el.textContent || '').trim();
+    if (existingDraft && !existingDraft.includes('[MCF AGENT SESSION]')) {
+      return {ok:false,error:'chat_unrelated_draft_present'};
+    }
     el.focus();
     if (el.isContentEditable) {
       const selection = window.getSelection();
@@ -1617,12 +1615,8 @@ async function injectAgentBootstrap(wc, bootstrap) {
       const s = getComputedStyle(el);
       return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
     };
-    const nodes = [
-      document.querySelector('#prompt-textarea'),
-      document.querySelector('textarea'),
-      ...document.querySelectorAll('[contenteditable="true"]')
-    ].filter(Boolean);
-    const el = nodes.find(visible);
+    const selected = (${resolveChatGPTComposer.toString()})(document);
+    const el = selected.ok ? selected.element : null;
     const text = el ? String(el.innerText || el.value || '') : '';
     return {
       ok: Boolean(el) && text.includes('[MCF AGENT SESSION]'),
@@ -1633,31 +1627,7 @@ async function injectAgentBootstrap(wc, bootstrap) {
 
   if (!typed?.ok) return { ok: false, error: 'chat_native_insert_not_observed', typed };
 
-  const sent = await wc.executeJavaScript(`(() => {
-    const visible = (el) => {
-      if (!el) return false;
-      const r = el.getBoundingClientRect();
-      const s = getComputedStyle(el);
-      return r.width > 10 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
-    };
-    const direct = document.querySelector('[data-testid="send-button"]');
-    const buttons = [...document.querySelectorAll('button')].filter(visible);
-    const send = direct || buttons.find((button) => {
-      const label = String(button.getAttribute('aria-label') || button.title || button.innerText || '').toLowerCase();
-      return (label.includes('send') || label.includes('enviar')) && !button.disabled;
-    });
-    if (send && !send.disabled) {
-      send.click();
-      return {ok:true, method:'button'};
-    }
-    const composer = document.querySelector('#prompt-textarea') || document.querySelector('textarea') || [...document.querySelectorAll('[contenteditable="true"]')].find(visible);
-    const form = composer?.closest('form');
-    if (form?.requestSubmit) {
-      form.requestSubmit();
-      return {ok:true, method:'form'};
-    }
-    return {ok:false,error:'chat_send_control_not_found'};
-  })()`, true);
+  const sent = await clickChatGPTSendOnce(wc, { timeoutMs: 5000 });
 
   if (!sent?.ok) return sent ?? { ok: false, error: 'chat_send_failed' };
 

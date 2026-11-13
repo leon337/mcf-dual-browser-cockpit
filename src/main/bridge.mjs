@@ -1,3 +1,4 @@
+import { clickChatGPTSendOnce } from './chatgpt-semantic-send.mjs';
 import http from 'node:http';
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
@@ -862,45 +863,7 @@ export class LocalAgentBridge {
       };
     }
 
-    const sent = await wc.executeJavaScript(`(() => {
-      const isStopControl = ${isGenerationStopControl.toString()};
-      const visible = (el) => {
-        if (!el) return false;
-        const r = el.getBoundingClientRect();
-        const s = getComputedStyle(el);
-        return r.width > 10 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
-      };
-      const buttons = [...document.querySelectorAll('button')].filter(visible);
-      const stopControl = buttons.find(button => isStopControl({
-        ariaLabel: button.getAttribute('aria-label'),
-        testId: button.getAttribute('data-testid'),
-        title: button.title,
-        text: button.innerText,
-      }));
-      if (stopControl) {
-        return { ok:false, error:'message_send_blocked_generation_active' };
-      }
-      const direct = document.querySelector('[data-testid="send-button"]');
-      const send = (direct && visible(direct) && !direct.disabled)
-        ? direct
-        : buttons.find((button) => {
-        const label = String(button.getAttribute('aria-label') || button.title || button.innerText || '').toLowerCase();
-        return (label.includes('send') || label.includes('enviar')) && !button.disabled;
-      });
-      if (send && !send.disabled) {
-        send.click();
-        return { ok:true, method:'button' };
-      }
-      const composer = document.querySelector('#prompt-textarea')
-        || document.querySelector('textarea')
-        || [...document.querySelectorAll('[contenteditable="true"]')].find(visible);
-      const form = composer?.closest('form');
-      if (form?.requestSubmit) {
-        form.requestSubmit();
-        return { ok:true, method:'form' };
-      }
-      return { ok:false, error:'chat_send_control_not_found' };
-    })()`, true);
+    const sent = await clickChatGPTSendOnce(wc, { timeoutMs: 5000 });
 
     if (!sent?.ok) {
       const cleanup = await this.#cleanupComposerDraft(wc);

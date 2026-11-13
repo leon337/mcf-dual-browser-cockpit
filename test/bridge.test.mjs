@@ -640,7 +640,7 @@ test('CR-14: Stop appearing after insert blocks submit without clicking it', asy
       if (script.includes('chat_send_control_not_found')) {
         submitGuardCalls += 1;
         const stopGuardIndex = script.indexOf('if (stopControl)');
-        const sendClickIndex = script.indexOf('send.click()');
+        const sendClickIndex = script.indexOf('control.element.click()');
         assert.ok(stopGuardIndex >= 0);
         assert.ok(sendClickIndex > stopGuardIndex);
         return {
