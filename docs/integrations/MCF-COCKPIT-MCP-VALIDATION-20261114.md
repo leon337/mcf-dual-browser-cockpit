@@ -53,11 +53,12 @@ Todas as rotas aparecem no `bridge.mjs`. Os payloads e headers foram validados p
 2. `node --test test/mcf-cockpit-mcp.test.mjs`: 6/6 PASS (initialize, ping, catálogo, mapeamento 12 ferramentas, headers, bloqueios).
 3. `npm test` do repositório, após inclusão: 117/117 PASS, exit 0.
 4. `GET /health` da Bridge real em `127.0.0.1:47831`: HTTP 200.
+5. `cockpit_state` via servidor MCP, autenticado com o descritor efêmero local da instância `notebook-team2`: PASS (`ok=true`, pane `workspace`, instanceId correspondente). Nenhum token, título ou URL de página foi impresso.
 
-**Limite:** o 4/4 é integração MCP→Bridge **simulada**; a Bridge real só recebeu leitura de saúde não autenticada. Não foi executado clique, digitação, navegação, captura ou GET autenticado em sessão real; portanto não há certificação E2E de uma sessão autenticada real.
+**Limite:** os 6 testes automatizados exercitam o contrato MCP→Bridge **simulada**; o smoke manual também comprovou `cockpit_health` e `cockpit_state` autenticado na Bridge **real**, ambos somente leitura. Não houve clique, digitação, navegação ou captura na sessão real. Portanto, não há certificação E2E para operações interativas, nem integração com as permissões do runtime central.
 
 O pacote Electron atual inclui `src/**/*`, não `bin/**/*`; a integração existe no checkout, não no AppImage empacotado. Não há conexão ao dispatcher/permission engine do runtime central MCF, nem configuração automática de cliente MCP.
 
-**Para promover:** validar com sessão autenticada de teste, integrar gates e receipts do MCF, revisar segurança e CI, aprovar alteração e somente então planejar merge/deploy separados.
+**Para promover:** validar operações interativas em sessão de teste isolada e governada, integrar gates e receipts do MCF, revisar segurança e CI, aprovar alteração e somente então planejar merge/deploy separados.
 
 **Compatibilidade de versões:** a cópia operacional observada é AppImage 0.7.4 e o repositório Git testado declara 0.7.5. As rotas também foram encontradas em arquivo de Bridge no diretório de instalação, mas isso não prova equivalência de toda a implementação empacotada.
