@@ -255,3 +255,14 @@ A tarefa de reconciliação está em [Issue #23](https://github.com/leon337/mcf-
 ## Controle da automação nas Configurações (0.7.5)
 
 Abra **CONTROLE → Configurações → Controle da automação** para ver o estado atual da Agent Bridge e usar **Pausar automação** ou **Retomar automação**. Os estados distinguem bridge desligada, automação pausada, ação em curso e automação liberada. A pausa bloqueia novas ações recebidas pela bridge, mas não cancela a ação que já está em curso. O botão usa o IPC confiável já existente e fica desativado quando a bridge está desligada.
+
+## Servidor MCP stdio — LocalAgentBridge
+
+O entrypoint `bin/mcf-cockpit-mcp.mjs` expõe o LocalAgentBridge a clientes MCP locais por JSON-RPC 2.0 em stdio, sem dependências externas. Inicia em **read-only** (5 ferramentas); `MCF_MCP_MODE=interactive` habilita as 7 operações de mutação somente em sessões com autorização e governança externa.
+
+- Executar com `npm run mcp`, informando `MCF_BRIDGE_TOKEN` por ambiente seguro.
+- `MCF_BRIDGE_URL` aceita apenas HTTP loopback; padrão `http://127.0.0.1:47831`.
+- Testar com `npm test` (inclui mapeamento das 12 ferramentas contra Bridge simulada).
+- Evidências, riscos e limitações: [`docs/integrations/MCF-COCKPIT-MCP-VALIDATION-20261114.md`](docs/integrations/MCF-COCKPIT-MCP-VALIDATION-20261114.md).
+
+O script MCP é usado no checkout Git; **não** integra automaticamente o runtime central do MCF e não é instalado no pacote Electron.
