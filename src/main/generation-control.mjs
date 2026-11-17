@@ -14,6 +14,8 @@ export function isGenerationStopControl({
     || label.includes('stop responding')
     || label.includes('parar de gerar')
     || label.includes('parar de responder')
+    || label === 'parar resposta'
+    || label === 'stop response'
     || label.includes('interromper resposta')
   );
 }
