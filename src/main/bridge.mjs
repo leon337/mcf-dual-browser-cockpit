@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { promisify } from 'node:util';
 import { LiveAgentEventBus } from './live-agent-events.mjs';
 import { isGenerationStopControl } from './generation-control.mjs';
+import { observeUserTurns, verifyUserTurnDelivery, sampleGenerationDOM, GenerationStallTracker } from './message-dom.mjs';
 import { buildRuntimeDiscovery } from './runtime-discovery.mjs';
 import { buildControlCatalog } from './control-catalog.mjs';
 
@@ -279,6 +280,8 @@ export class LocalAgentBridge {
     this.messageComposerReadyPollMs = Number.isFinite(messageComposerReadyPollMs)
       ? Math.max(1, Number(messageComposerReadyPollMs))
       : 250;
+    this.generationStalls = new GenerationStallTracker();
+    this.uncertainMessageSends = new Map();
     this.onEvent = onEvent;
     this.server = null;
     this.port = null;
@@ -490,6 +493,131 @@ export class LocalAgentBridge {
     return this.#sendMessage(pane, normalizedMessage);
   }
 
+  async getGenerationStatus(target) {
+    const { pane, wc } = this.#paneWebContents(target);
+    if (!pane || !wc || typeof wc.executeJavaScript !== 'function') {
+      return { ok: false, error: 'generation_target_unavailable', pane };
+    }
+    const sample = await wc.executeJavaScript(
+      `(${sampleGenerationDOM.toString()})(document)`, true
+    ).catch(() => null);
+    if (!sample?.url || !sample.url.startsWith(pane === 'workspace'
+      ? 'https://gemini.google.com/' : 'https://chatgpt.com/')) {
+      return { ok: false, error: 'generation_snapshot_unavailable', pane };
+    }
+    return this.generationStalls.observe(pane, sample);
+  }
+
+  async recoverGeneration(target, { confirm = false, fingerprint = '' } = {}) {
+    const { pane, wc } = this.#paneWebContents(target);
+    if (!pane || !wc) return { ok: false, error: 'generation_target_unavailable', pane };
+    if (confirm !== true || typeof fingerprint !== 'string' || !fingerprint) {
+      return { ok: false, error: 'explicit_recovery_confirmation_required', pane };
+    }
+    const status = await this.getGenerationStatus(pane);
+    if (!status.ok || !status.suspectedStall || status.fingerprint !== fingerprint) {
+      return { ok: false, error: 'generation_recovery_not_verified', pane, status };
+    }
+    const clicked = await wc.executeJavaScript(`(() => {
+      const fingerprint = ${JSON.stringify(fingerprint)};
+      const sample = ${sampleGenerationDOM.toString()};
+      const current = sample(document);
+      if (!current.generationActive || current.fingerprint !== fingerprint)
+        return { ok:false, error:'generation_changed_before_recovery' };
+      const visible = el => {
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        return r.width > 10 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
+      };
+      const stop = [...document.querySelectorAll('button')].find(button =>
+        visible(button) && /^(parar resposta|parar de responder|stop generating|stop responding|stop response)$/i
+          .test(String(button.getAttribute('aria-label') || button.title || '').trim()));
+      if (!stop) return { ok:false, error:'generation_stop_control_missing' };
+      stop.click();
+      return { ok:true, clicked:true, url:location.href };
+    })()`, true).catch(() => ({ ok: false, error: 'generation_stop_failed' }));
+    if (!clicked?.ok) return { ok: false, pane, ...clicked };
+    // Gemini asks for a second explicit confirmation. Only accept the exact
+    // known cancellation label, never a generic confirmation button.
+    await new Promise(resolve => setTimeout(resolve, 350));
+    const modal = await wc.executeJavaScript(`(() => {
+      const visible = el => {
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        return r.width > 10 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
+      };
+      const text = String(document.body?.innerText || '');
+      if (!text.includes('Cancelar geração de respostas?')) return { modal:false };
+      const yes = [...document.querySelectorAll('button')].find(b => visible(b) &&
+        String(b.innerText || b.getAttribute('aria-label') || '').trim() === 'Sim, cancelar');
+      if (!yes) return { modal:true, confirmed:false };
+      yes.click();
+      return { modal:true, confirmed:true };
+    })()`, true).catch(() => ({ modal: null, confirmed: false }));
+    await new Promise(resolve => setTimeout(resolve, 450));
+    this.generationStalls.clear(pane);
+    const after = await this.getGenerationStatus(pane);
+    return {
+      ok: Boolean(after?.ok && !after.generationActive),
+      pane,
+      recoveryAttempted: true,
+      modal,
+      after,
+      ...(after?.generationActive ? { error: 'generation_cancellation_not_confirmed' } : {}),
+    };
+  }
+
+  async #reconcilePendingMessage(pane, wc) {
+    const pending = this.uncertainMessageSends.get(pane);
+    if (!pending) return { pending: false };
+    if (!wc || wc.isDestroyed?.()) return { pending: true, confirmed: false };
+    const probe = await wc.executeJavaScript(`(() => {
+      const observe = ${observeUserTurns.toString()};
+      const verify = ${verifyUserTurnDelivery.toString()};
+      const pane = ${JSON.stringify(pane)};
+      const baseline = ${JSON.stringify(pending.baseline)};
+      const expectedMessage = ${JSON.stringify(pending.message)};
+      const composer = document.querySelector('#prompt-textarea')
+        || document.querySelector('textarea')
+        || document.querySelector('[contenteditable="true"]');
+      const composerCleared = !composer || !String(composer.innerText || composer.value || '').trim();
+      return verify({
+        pane, baseline, observation: observe(document, pane),
+        expectedMessage, composerCleared, url: location.href,
+      });
+    })()`, true).catch(() => null);
+    if (probe?.sent) {
+      this.uncertainMessageSends.delete(pane);
+      return { pending: false, confirmed: true, recovered: true };
+    }
+    return { pending: true, confirmed: false };
+  }
+
+  async getMessageRecoveryStatus(target) {
+    const { pane, wc } = this.#paneWebContents(target);
+    if (!pane || !wc) return { ok: false, error: 'message_target_unavailable' };
+    const state = await this.#reconcilePendingMessage(pane, wc);
+    return {
+      ok: true, pane, ...state,
+      retrySafe: !state.pending && !state.confirmed,
+      recoveryRequired: Boolean(state.pending),
+    };
+  }
+
+  async acknowledgeUnconfirmedMessage(target, { confirm = false } = {}) {
+    const { pane, wc } = this.#paneWebContents(target);
+    if (!pane || !wc) return { ok: false, error: 'message_target_unavailable' };
+    if (confirm !== true) return { ok: false,
+      error: 'explicit_delivery_reconciliation_required', pane };
+    const outcome = await this.#reconcilePendingMessage(pane, wc);
+    if (outcome.confirmed) return { ok: false,
+      error: 'previous_message_already_delivered', pane, resendAllowed: false };
+    if (!outcome.pending) return { ok: true, pane, pending: false };
+    this.uncertainMessageSends.delete(pane);
+    return { ok: true, pane, pending: false, acknowledgedUncertainty: true,
+      warning: 'delivery_was_not_proven_absent; operator must inspect conversation before resending' };
+  }
+
   async #messageComposerReadiness(wc) {
     if (!wc || wc.isDestroyed?.() || typeof wc.executeJavaScript !== 'function') {
       return {
@@ -664,6 +792,19 @@ export class LocalAgentBridge {
       return { ok: false, pane, error: 'message_transport_unavailable' };
     }
 
+    const unresolved = this.uncertainMessageSends.get(pane);
+    if (unresolved) {
+      const recovery = await this.#reconcilePendingMessage(pane, wc);
+      if (recovery.confirmed && unresolved.message === message) {
+        return { ok: true, pane, deliveryConfirmed: true, recovered: true,
+          resent: false, url: wc.getURL?.() || null };
+      }
+      if (recovery.pending) {
+        return { ok: false, pane, error: 'message_delivery_reconciliation_required',
+          retrySafe: false, recoveryRequired: true, resent: false };
+      }
+    }
+
     const readiness = await this.#waitForMessageComposerReady(wc);
     if (!readiness?.ok) {
       return {
@@ -683,19 +824,14 @@ export class LocalAgentBridge {
         const s = getComputedStyle(el);
         return r.width > 20 && r.height > 10 && s.display !== 'none' && s.visibility !== 'hidden';
       };
-      // ChatGPT's 2026 UI uses data-user-message-bubble instead of
-      // data-message-author-role. Preserve compatibility with the older DOM.
-      const modernUserMessages = [...document.querySelectorAll('[data-user-message-bubble]')];
-      const userMessages = modernUserMessages.length ? modernUserMessages
-        : [...document.querySelectorAll('[data-message-author-role="user"]')];
+      const observe = ${observeUserTurns.toString()};
+      const observation = observe(document, ${JSON.stringify(pane)});
       const assistantMessages = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
-      const userTurnId = element => element?.getAttribute('data-message-id')
-        || element?.closest('[data-chatgpt-search-message-ids]')?.getAttribute('data-chatgpt-search-message-ids')
-        || null;
       const baseline = {
         url: location.href,
-        userMessageCount: userMessages.length,
-        lastUserMessageId: userTurnId(userMessages.at(-1)),
+        userMessageCount: observation.userMessageCount,
+        lastUserMessageId: observation.lastUserMessageId,
+        lastUserSignature: observation.lastUserSignature,
         lastAssistantMessageId: assistantMessages.at(-1)?.getAttribute('data-message-id') || null,
       };
       const findComposer = () => document.querySelector('#prompt-textarea')
@@ -919,10 +1055,11 @@ export class LocalAgentBridge {
       ? Number(prepared.baseline.userMessageCount)
       : 0;
     const baselineLastUserMessageId = prepared?.baseline?.lastUserMessageId ?? null;
+    const baselineLastUserSignature = prepared?.baseline?.lastUserSignature ?? null;
     const baselineLastAssistantMessageId = prepared?.baseline?.lastAssistantMessageId ?? null;
 
     let verification = null;
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    for (let attempt = 0; attempt < (pane === 'workspace' ? 55 : 20); attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 150));
       verification = await wc.executeJavaScript(`(() => {
         const baselineUrl = ${JSON.stringify(baselineUrl)};
@@ -930,38 +1067,34 @@ export class LocalAgentBridge {
         const baselineUserMessageCount = ${baselineUserMessageCount};
         const baselineLastUserMessageId = ${JSON.stringify(baselineLastUserMessageId)};
         const baselineLastAssistantMessageId = ${JSON.stringify(baselineLastAssistantMessageId)};
+        const baselineLastUserSignature = ${JSON.stringify(baselineLastUserSignature)};
+        const pane = ${JSON.stringify(pane)};
+        const observe = ${observeUserTurns.toString()};
+        const verify = ${verifyUserTurnDelivery.toString()};
         const composer = document.querySelector('#prompt-textarea')
           || document.querySelector('textarea')
           || document.querySelector('[contenteditable="true"]');
         const text = composer ? String(composer.innerText || composer.value || '').trim() : '';
         const url = location.href;
-        const modernUserMessages = [...document.querySelectorAll('[data-user-message-bubble]')];
-        const userMessages = modernUserMessages.length ? modernUserMessages
-          : [...document.querySelectorAll('[data-message-author-role="user"]')];
+        const observation = observe(document, pane);
         const assistantMessages = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
-        const userMessageCount = userMessages.length;
-        const latestUser = userMessages.at(-1) || null;
-        const lastUserMessageId = latestUser?.getAttribute('data-message-id')
-          || latestUser?.closest('[data-chatgpt-search-message-ids]')?.getAttribute('data-chatgpt-search-message-ids')
-          || null;
         const lastAssistantMessageId = assistantMessages.at(-1)?.getAttribute('data-message-id') || null;
-        const normalize = value => String(value || '').replace(/\\s+/g, ' ').trim();
-        const messageMatchesLastUserTurn = Boolean(latestUser)
-          && normalize(latestUser.innerText || latestUser.textContent || '') === normalize(expectedMessage);
         const composerCleared = !composer || text.length === 0;
-        // An identical user turn in another conversation is not delivery here.
-        const baselineConversationId = baselineUrl.match(/\\/c\\/([^/?#]+)/)?.[1] || null;
-        const currentConversationId = location.pathname.match(/\\/c\\/([^/?#]+)/)?.[1] || null;
-        const conversationBindingPreserved = !baselineConversationId
-          || currentConversationId === baselineConversationId;
-        const conversationAdvanced = Boolean(
-          (lastUserMessageId && lastUserMessageId !== baselineLastUserMessageId)
-          || userMessageCount > baselineUserMessageCount
-          || (url !== baselineUrl && /\\/c\\/[^/]+/.test(location.pathname))
-        );
-        // Never infer delivery from an empty composer or unrelated new turn.
-        const sent = composerCleared && conversationAdvanced && messageMatchesLastUserTurn
-          && conversationBindingPreserved;
+        const check = verify({
+          pane,
+          baseline: {
+            url: baselineUrl,
+            userMessageCount: baselineUserMessageCount,
+            lastUserMessageId: baselineLastUserMessageId,
+            lastUserSignature: baselineLastUserSignature,
+          },
+          observation,
+          expectedMessage,
+          composerCleared,
+          url,
+        });
+        const { sent, conversationAdvanced, messageMatchesLastUserTurn,
+          conversationBindingPreserved } = check;
         return {
           ok: true,
           composerCleared,
@@ -970,8 +1103,8 @@ export class LocalAgentBridge {
           conversationBindingPreserved,
           sent,
           url,
-          userMessageCount,
-          lastUserMessageId,
+          userMessageCount: observation.userMessageCount,
+          lastUserMessageId: observation.lastUserMessageId,
           lastAssistantMessageId,
           baselineLastAssistantMessageId,
         };
@@ -980,11 +1113,18 @@ export class LocalAgentBridge {
     }
 
     if (!verification?.sent || verification?.messageMatchesLastUserTurn !== true) {
+      // A click may have reached Gemini even if its Angular view updated too
+      // late to confirm. Never blindly resend a possibly delivered message.
+      this.uncertainMessageSends.set(pane, {
+        message, baseline: prepared.baseline, observedAt: Date.now(),
+      });
       const cleanup = await this.#cleanupComposerDraft(wc);
       return {
         ok: false,
         pane,
         error: 'message_send_unconfirmed',
+        retrySafe: false,
+        recoveryRequired: true,
         method: sent.method ?? null,
         verification,
         cleanup,
@@ -1468,6 +1608,8 @@ export class LocalAgentBridge {
         '/v1/type',
         '/v1/pointer',
         '/v1/upload-file',
+        '/v1/generation/recover',
+        '/v1/message-recovery/acknowledge',
       ]);
       if (req.method === 'POST'
           && recoveryGuardedPaneMutationRoutes.has(requestUrl.pathname)
@@ -1481,6 +1623,33 @@ export class LocalAgentBridge {
             checkpoint,
           });
         }
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/generation-status') {
+        const result = await this.getGenerationStatus(pane);
+        return json(res, result.ok ? 200 : 503, result);
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/message-recovery/acknowledge') {
+        const result = await this.acknowledgeUnconfirmedMessage(pane, {
+          confirm: body?.confirm === true,
+        });
+        return json(res, result.ok ? 200 : 409, result);
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/v1/message-recovery') {
+        const result = await this.getMessageRecoveryStatus(pane);
+        return json(res, result.ok ? 200 : 503, result);
+      }
+
+      if (req.method === 'POST' && requestUrl.pathname === '/v1/generation/recover') {
+        const result = await this.recoverGeneration(pane, {
+          confirm: body?.confirm === true,
+          fingerprint: body?.fingerprint,
+        });
+        const status = result.ok ? 200 : result.error === 'generation_recovery_not_verified'
+          ? 409 : result.error === 'explicit_recovery_confirmation_required' ? 403 : 422;
+        return json(res, status, result);
       }
 
       if (req.method === 'GET' && requestUrl.pathname === '/v1/state') {

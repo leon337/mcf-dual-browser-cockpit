@@ -1,7 +1,7 @@
 {
   "schema": "mcf-dual-browser-control-catalog/v1",
   "application": "MCF Dual Browser Cockpit",
-  "baselineVersion": "0.7.5",
+  "baselineVersion": "0.7.6",
   "ownerRepository": "https://github.com/leon337/mcf-dual-browser-cockpit",
   "contract": {
     "discovery": "GET /v1/control-catalog (authenticated, read-only)",
@@ -18,7 +18,7 @@
     "Agent identity UNBOUND is not READY; browser delivery does not prove canonical agent signature.",
     "Copying token to clipboard requires the native UI and can expose a secret to other local applications.",
     "External navigation, capture and settings are side-effectful; tests use isolated profiles.",
-    "This baseline is 0.7.5 dual-pane, not TRI-agent 0.8.0."
+    "This baseline is 0.7.6 dual-pane, not TRI-agent 0.8.0."
   ],
   "uiControls": [
     {
@@ -760,6 +760,13 @@
     },
     {
       "method": "GET",
+      "path": "/v1/control-catalog",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "available also when PAUSED; never returns credentials"
+    },
+    {
+      "method": "GET",
       "path": "/v1/discovery",
       "authorization": "ephemeral bearer token + instance header",
       "effect": "read",
@@ -788,6 +795,20 @@
     },
     {
       "method": "GET",
+      "path": "/v1/generation-status",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no cancellation"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/generation/recover",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "explicit confirmation + 90s stable fingerprint; checkpoint required"
+    },
+    {
+      "method": "GET",
       "path": "/v1/interactive",
       "authorization": "ephemeral bearer token + instance header",
       "effect": "read",
@@ -813,6 +834,20 @@
       "authorization": "ephemeral bearer token + instance header",
       "effect": "mutation",
       "constraints": "requires unpaused + instance gates; conditional backend checks"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/message-recovery",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "read",
+      "constraints": "read-only; no resending"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/message-recovery/acknowledge",
+      "authorization": "ephemeral bearer token + instance header",
+      "effect": "mutation",
+      "constraints": "explicit acknowledgement of uncertain delivery; no resend"
     },
     {
       "method": "POST",
@@ -918,13 +953,6 @@
       "authorization": "ephemeral bearer token + instance header",
       "effect": "mutation",
       "constraints": "requires unpaused + instance gates; conditional backend checks"
-    },
-    {
-      "method": "GET",
-      "path": "/v1/control-catalog",
-      "authorization": "ephemeral bearer token + instance header",
-      "effect": "read",
-      "constraints": "available also when PAUSED; never returns credentials"
     }
   ]
 }

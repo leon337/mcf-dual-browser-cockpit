@@ -983,6 +983,15 @@ test('message delivery requires conversation advancement and cleans residual dra
   assert.equal(composerText, '');
   assert.ok(scripts.some(script => script.includes('MCF_DRAFT_CLEANUP')));
 
+  // A previous unconfirmed click may have reached the provider. No blind retry.
+  const blocked = await bridge.sendMessage('chat', 'mensagem confirmada');
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.error, 'message_delivery_reconciliation_required');
+  assert.equal(blocked.retrySafe, false);
+  const acknowledgement = await bridge.acknowledgeUnconfirmedMessage('chat', { confirm: true });
+  assert.equal(acknowledgement.ok, true);
+  assert.equal(acknowledgement.acknowledgedUncertainty, true);
+
   // Now prove that an empty composer alone is not enough: conversation must advance.
   let verificationCalls = 0;
   wc.executeJavaScript = async script => {
